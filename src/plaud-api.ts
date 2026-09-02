@@ -138,26 +138,22 @@ export class PlaudApiClient {
   public async listFiles(pageSize = 100): Promise<PlaudFileItem[]> {
     let allFiles: PlaudFileItem[] = [];
     let page = 1;
-    let hasMore = true;
 
-    while (hasMore) {
+    while (true) {
       const endpoint = `/open/third-party/files/?page=${page}&page_size=${pageSize}`;
       const data = await this.request(endpoint);
 
-      const items = data.data?.items || data.data?.file_list || data.data || [];
+      const items = Array.isArray(data.data) ? data.data : (data.data?.items || data.data?.file_list || []);
       if (!Array.isArray(items) || items.length === 0) {
-        hasMore = false;
         break;
       }
 
       allFiles.push(...items);
 
-      const total = data.data?.total || data.total || 0;
-      if (allFiles.length >= total || items.length < pageSize) {
-        hasMore = false;
-      } else {
-        page++;
+      if (items.length < pageSize) {
+        break;
       }
+      page++;
     }
 
     return allFiles;
