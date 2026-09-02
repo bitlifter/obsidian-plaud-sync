@@ -13,7 +13,7 @@ export class PlaudSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Plaud Sync Settings" });
+    containerEl.createEl("h2", { text: "Plaud to Obsidian Settings" });
 
     // 1. Account & Connection Status
     containerEl.createEl("h3", { text: "Authentication" });

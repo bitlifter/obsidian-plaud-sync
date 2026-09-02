@@ -1,6 +1,6 @@
 {
-  "id": "plaud-sync",
-  "name": "Plaud Sync",
+  "id": "plaud-to-obsidian",
+  "name": "Plaud to Obsidian",
   "version": "1.0.0",
   "minAppVersion": "1.5.0",
   "description": "Sync Plaud AI recordings, summaries, timestamped transcripts, audio playback, and attendee speaker identities into Obsidian.",

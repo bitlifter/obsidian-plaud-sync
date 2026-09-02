@@ -18,7 +18,7 @@ export default class PlaudPlugin extends Plugin {
     );
 
     // 1. Ribbon Icon (Left sidebar)
-    this.addRibbonIcon("mic", "Plaud Sync: Sync Recordings", async () => {
+    this.addRibbonIcon("mic", "Plaud to Obsidian: Sync Recordings", async () => {
       this.updateStatusBar("Syncing...");
       try {
         await this.syncEngine.syncRecordings();
