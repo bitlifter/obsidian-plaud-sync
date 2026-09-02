@@ -297,7 +297,7 @@ Respond with ONLY a valid JSON object in this exact schema:
   "confidence": 0.95
 }`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
   const response = await requestUrl({
     url,
     method: "POST",
@@ -330,8 +330,91 @@ Respond with ONLY a valid JSON object in this exact schema:
     speakerMap: parsed.speakerMap || {},
     people: Array.isArray(parsed.people) ? parsed.people : [],
     organizations: orgs,
-    confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.9,
-    source: "cloud_gemini"
+    confidence: parsed.confidence || 0.95,
+    source: "gemini"
+  };
+}
+
+export interface AudioTranscriptionResult {
+  summaryContent: string;
+  outlineText: string;
+  transcriptSegments: TranscriptSegment[];
+  people: string[];
+  organizations: string[];
+}
+
+export async function transcribeAudioGemini(
+  audioBuffer: ArrayBuffer,
+  apiKey: string,
+  title: string
+): Promise<AudioTranscriptionResult> {
+  if (!apiKey) throw new Error("Gemini API key is not configured.");
+
+  const base64Audio = Buffer.from(audioBuffer).toString("base64");
+
+  const prompt = `You are an expert AI meeting transcription and intelligence assistant.
+Recording Title: ${title}
+
+Listen carefully to this audio recording and produce:
+1. A timestamped verbatim transcript with speaker diarization (label speakers by real names if introduced or obvious from context, or Speaker 1, Speaker 2, etc.).
+2. A comprehensive executive meeting summary with key discussion points, context, and decisions made.
+3. Outline of discussion topics.
+4. Action items with assignees if any were decided.
+5. List of meeting participants (people) and organizations mentioned.
+
+Respond strictly with a valid JSON object in this exact schema:
+{
+  "summary": "Full markdown meeting summary and action items",
+  "outline": "Markdown outline of topics discussed with bullet points",
+  "people": ["Alice", "Bob"],
+  "organizations": ["Org A", "Org B"],
+  "transcript": [
+    { "speaker": "Speaker 1", "startTime": 0, "endTime": 12000, "content": "Verbatim speech..." }
+  ]
+}`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
+  const response = await requestUrl({
+    url,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: "audio/mp3", data: base64Audio } },
+          { text: prompt }
+        ]
+      }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        temperature: 0.1
+      }
+    }),
+    throw: false
+  });
+
+  if (response.status !== 200) {
+    throw new Error(`Gemini audio transcription error ${response.status}: ${response.text}`);
+  }
+
+  const data = response.json;
+  const textContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!textContent) {
+    throw new Error("No transcription content returned by Gemini");
+  }
+
+  const parsed = JSON.parse(textContent);
+  const orgs = Array.isArray(parsed.organizations) ? parsed.organizations : [];
+  if (orgs.length > 0) {
+    await saveLearnedOrganizations(orgs);
+  }
+
+  return {
+    summaryContent: parsed.summary || "",
+    outlineText: parsed.outline || "",
+    transcriptSegments: Array.isArray(parsed.transcript) ? parsed.transcript : [],
+    people: Array.isArray(parsed.people) ? parsed.people : [],
+    organizations: orgs
   };
 }
 

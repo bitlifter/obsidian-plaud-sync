@@ -1,6 +1,6 @@
 import { App, Notice, normalizePath, TFile } from "obsidian";
 import { PlaudApiClient } from "./plaud-api";
-import { enrichMeetingData } from "./enricher";
+import { enrichMeetingData, transcribeAudioGemini } from "./enricher";
 import {
   parsePlaudDate,
   formatDuration,
@@ -101,7 +101,7 @@ export class PlaudSyncEngine {
 
       for (let i = 0; i < pendingFiles.length; i++) {
         const item = pendingFiles[i];
-        const rawTitle = item.filename || item.file_name || "Recording";
+        let rawTitle = item.name || item.filename || "Recording";
 
         if (onProgress) {
           onProgress(i + 1, pendingFiles.length, rawTitle);
@@ -109,9 +109,9 @@ export class PlaudSyncEngine {
 
         try {
           const detail = await this.client.getFileDetail(item.id);
-          const payload = detail.payload || detail;
+          rawTitle = item.name || detail.name || item.filename || item.file_name || "Recording";
 
-          const dateInfo = parsePlaudDate(item.start_time || item.created_at || detail.start_time);
+          const dateInfo = parsePlaudDate(item.start_time || item.created_at || detail.start_time || detail.start_at);
           const durationSec = item.duration || detail.duration || 0;
           const durationStr = formatDuration(durationSec);
 
@@ -121,8 +121,10 @@ export class PlaudSyncEngine {
           // Audio file handling
           let audioFilename: string | null = null;
           let audioVaultPath: string | null = null;
+          let audioBuffer: ArrayBuffer | null = null;
 
-          if (this.settings.downloadAudio) {
+          const downloadLink = item.audio_url || detail.audio_url || detail.presigned_url;
+          if (this.settings.downloadAudio && downloadLink) {
             const safeAudioBase = sanitizeFilename(rawTitle, 80);
             audioFilename = `${dateInfo.date} ${safeAudioBase}.mp3`;
             audioVaultPath = normalizePath(`${this.settings.targetAttachmentsFolder}/${audioFilename}`);
@@ -130,50 +132,125 @@ export class PlaudSyncEngine {
             const existingAudio = this.app.vault.getAbstractFileByPath(audioVaultPath);
             if (!existingAudio) {
               try {
-                const audioBuffer = await this.client.downloadAudioBuffer(item.id, item.audio_url || detail.audio_url);
+                audioBuffer = await this.client.downloadAudioBuffer(item.id, downloadLink);
                 await this.app.vault.createBinary(audioVaultPath, audioBuffer);
               } catch (audioErr: any) {
                 console.warn(`Could not download audio for ${rawTitle}: ${audioErr.message}`);
                 audioFilename = null;
               }
+            } else if (this.app.vault.adapter) {
+              try {
+                audioBuffer = await this.app.vault.adapter.readBinary(audioVaultPath);
+              } catch {}
             }
           }
 
-          // Extract transcript segments
-          let transcriptSegments: any[] = [];
-          if (Array.isArray(payload.transcription)) {
-            transcriptSegments = payload.transcription;
-          } else if (Array.isArray(detail.transcription)) {
-            transcriptSegments = detail.transcription;
-          } else if (payload.transcription?.segments) {
-            transcriptSegments = payload.transcription.segments;
+          // 1. Resolve summary from detail.note_list
+          let summaryContent = "";
+          const noteList = detail.note_list || [];
+          const sumNote = noteList.find((n: any) => n.data_type === "auto_sum_note");
+          if (sumNote) {
+            summaryContent = await this.client.loadBlockContent(sumNote);
+          } else if (autoSum.summaryContent) {
+            summaryContent = autoSum.summaryContent;
           }
 
-          // AI / Heuristic Enrichment
-          const enriched = await enrichMeetingData({
-            transcriptSegments,
-            summaryContent: autoSum.summaryContent,
-            title: rawTitle,
-            geminiApiKey: this.settings.geminiApiKey,
-            minConfidence: this.settings.minConfidence,
-            forceCloud: this.settings.forceCloud,
-            customOrgs: this.settings.customOrgs
-          });
+          // 2. Resolve transcript from detail.source_list
+          let transcriptSegments: any[] = [];
+          const sourceList = detail.source_list || [];
+          const txBlock = sourceList.find((s: any) => s.data_type === "transaction" || s.data_type === "transaction_polish");
+          if (txBlock) {
+            const rawTx = await this.client.loadBlockContent(txBlock);
+            if (rawTx) {
+              try {
+                const parsed = JSON.parse(rawTx);
+                if (Array.isArray(parsed)) transcriptSegments = parsed;
+              } catch {}
+            }
+          }
+          if (transcriptSegments.length === 0) {
+            const payload = detail.payload || detail;
+            if (Array.isArray(payload.transcription)) {
+              transcriptSegments = payload.transcription;
+            } else if (Array.isArray(detail.transcription)) {
+              transcriptSegments = detail.transcription;
+            } else if (payload.transcription?.segments) {
+              transcriptSegments = payload.transcription.segments;
+            }
+          }
 
-          // Generate Note Content
+          // 3. Resolve outline from detail.source_list
+          let outlineText = "";
+          const outlineBlock = sourceList.find((s: any) => s.data_type === "outline");
+          if (outlineBlock) {
+            const rawOutline = await this.client.loadBlockContent(outlineBlock);
+            if (rawOutline) {
+              try {
+                const parsed = JSON.parse(rawOutline);
+                if (Array.isArray(parsed)) {
+                  outlineText = parsed.map((it: any) => `- **${it.topic || it.title || ""}**`).join("\n");
+                } else if (typeof rawOutline === "string") {
+                  outlineText = rawOutline;
+                }
+              } catch {
+                outlineText = rawOutline;
+              }
+            }
+          }
+          if (!outlineText && autoSum.outlineText) {
+            outlineText = autoSum.outlineText;
+          }
+
+          // 4. Fallback: If Plaud never transcribed the audio, use Gemini Multimodal Audio Transcription
+          let enrichedPeople: string[] = [];
+          let enrichedOrganizations: string[] = [];
+          let speakerMap: Record<string, string> = {};
+
+          if (transcriptSegments.length === 0 && !summaryContent && audioBuffer && this.settings.geminiApiKey) {
+            try {
+              const geminiResult = await transcribeAudioGemini(audioBuffer, this.settings.geminiApiKey, rawTitle);
+              if (geminiResult.transcriptSegments.length > 0 || geminiResult.summaryContent) {
+                transcriptSegments = geminiResult.transcriptSegments;
+                summaryContent = geminiResult.summaryContent;
+                if (geminiResult.outlineText) outlineText = geminiResult.outlineText;
+                enrichedPeople = geminiResult.people;
+                enrichedOrganizations = geminiResult.organizations;
+              }
+            } catch (transErr: any) {
+              console.warn(`Gemini audio transcription fallback failed for ${rawTitle}: ${transErr.message}`);
+            }
+          }
+
+          // 5. Enrichment (Speaker detection & Org extraction)
+          if (enrichedPeople.length === 0 && enrichedOrganizations.length === 0) {
+            const enriched = await enrichMeetingData({
+              transcriptSegments,
+              summaryContent,
+              title: rawTitle,
+              geminiApiKey: this.settings.geminiApiKey,
+              minConfidence: this.settings.minConfidence,
+              forceCloud: this.settings.forceCloud,
+              customOrgs: this.settings.customOrgs
+            });
+            enrichedPeople = enriched.people;
+            enrichedOrganizations = enriched.organizations;
+            speakerMap = enriched.speakerMap;
+          }
+
+          // 6. Generate Note Content
           const noteContent = generateKepanoNote({
             title: noteTitle,
             date: dateInfo.date,
             time: dateInfo.time,
             duration: durationStr,
-            people: enriched.people,
-            organizations: enriched.organizations,
+            people: enrichedPeople,
+            organizations: enrichedOrganizations,
             topics: [],
-            summaryContent: autoSum.summaryContent,
-            outlineText: autoSum.outlineText,
+            summaryContent,
+            outlineText,
             audioFilename,
             transcriptSegments,
-            speakerMap: enriched.speakerMap
+            speakerMap
           });
 
           const noteVaultPath = normalizePath(`${this.settings.targetNotesFolder}/${noteTitle}.md`);

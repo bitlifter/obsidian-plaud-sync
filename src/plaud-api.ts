@@ -178,6 +178,26 @@ export class PlaudApiClient {
     return data;
   }
 
+  public async loadBlockContent(block: any): Promise<string> {
+    if (!block) return "";
+    const inline = block.data_content;
+    if (typeof inline === "string" && inline.length > 0) {
+      return inline;
+    }
+    const link = block.data_link;
+    if (typeof link === "string" && link.length > 0) {
+      try {
+        const res = await requestUrl({ url: link, throw: false });
+        if (res.status === 200) {
+          return res.text;
+        }
+      } catch (err: any) {
+        console.warn(`Failed to fetch block content from data_link: ${err.message}`);
+      }
+    }
+    return "";
+  }
+
   public async downloadAudioBuffer(fileId: string, directUrl?: string): Promise<ArrayBuffer> {
     let downloadUrl = directUrl;
 
