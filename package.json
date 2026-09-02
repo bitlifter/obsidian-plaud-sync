@@ -1,0 +1,27 @@
+{
+  "name": "obsidian-plaud-sync",
+  "version": "1.0.0",
+  "description": "Sync Plaud AI recordings, summaries, transcripts, master audio, and speaker identities into Obsidian.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "plaud",
+    "meeting-notes",
+    "transcription",
+    "ai"
+  ],
+  "author": "bitlifter",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.20.0",
+    "obsidian": "^1.5.7",
+    "tslib": "^2.6.2",
+    "typescript": "^5.3.3"
+  }
+}

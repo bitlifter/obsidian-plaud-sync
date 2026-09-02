@@ -1,0 +1,208 @@
+import { requestUrl } from "obsidian";
+import * as os from "os";
+import * as path from "path";
+import * as fsPromises from "fs/promises";
+import { PlaudTokenSet, PlaudFileItem } from "./types";
+
+export class PlaudApiClient {
+  private tokenPath: string;
+  private tokenSet: PlaudTokenSet | null = null;
+  private baseUrl = "https://platform.plaud.ai/developer/api";
+
+  constructor() {
+    this.tokenPath = path.join(os.homedir(), ".plaud", "tokens-mcp.json");
+  }
+
+  public async hasLocalTokens(): Promise<boolean> {
+    try {
+      await fsPromises.access(this.tokenPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  public async loadTokens(): Promise<PlaudTokenSet> {
+    try {
+      const data = await fsPromises.readFile(this.tokenPath, "utf-8");
+      this.tokenSet = JSON.parse(data);
+      return this.tokenSet!;
+    } catch (err: any) {
+      throw new Error(
+        `No Plaud credentials found at ${this.tokenPath}. Please authenticate via 'plaud-export login' or link your account in settings.`
+      );
+    }
+  }
+
+  public async saveTokens(tokens: Partial<PlaudTokenSet>): Promise<void> {
+    this.tokenSet = { ...this.tokenSet, ...tokens } as PlaudTokenSet;
+    const dir = path.dirname(this.tokenPath);
+    await fsPromises.mkdir(dir, { recursive: true });
+    await fsPromises.writeFile(this.tokenPath, JSON.stringify(this.tokenSet, null, 2), "utf-8");
+  }
+
+  public async getValidAccessToken(): Promise<string> {
+    if (!this.tokenSet) {
+      await this.loadTokens();
+    }
+
+    if (!this.tokenSet?.access_token) {
+      throw new Error("No access_token found in Plaud token set.");
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (this.tokenSet.expires_at && nowSec >= this.tokenSet.expires_at - 60) {
+      if (this.tokenSet.refresh_token) {
+        await this.refreshAccessToken();
+      }
+    }
+
+    return this.tokenSet.access_token;
+  }
+
+  public async refreshAccessToken(): Promise<string> {
+    if (!this.tokenSet?.refresh_token) {
+      throw new Error("No refresh_token available to refresh access token.");
+    }
+
+    const url = `${this.baseUrl}/oauth/third-party/access-token/refresh`;
+    const res = await requestUrl({
+      url,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        refresh_token: this.tokenSet.refresh_token
+      }),
+      throw: false
+    });
+
+    if (res.status !== 200) {
+      throw new Error(`Failed to refresh Plaud token (HTTP ${res.status}): ${res.text}`);
+    }
+
+    const data = res.json;
+    if (data.code !== 0 && data.code !== 200 && data.status !== "success" && !data.data?.access_token) {
+      throw new Error(`Refresh token rejected: ${JSON.stringify(data)}`);
+    }
+
+    const tokenPayload = data.data || data;
+    await this.saveTokens({
+      access_token: tokenPayload.access_token,
+      refresh_token: tokenPayload.refresh_token || this.tokenSet.refresh_token,
+      expires_at: tokenPayload.expires_in
+        ? Math.floor(Date.now() / 1000) + tokenPayload.expires_in
+        : undefined
+    });
+
+    return this.tokenSet!.access_token;
+  }
+
+  private async request(endpoint: string, options: { method?: string; body?: any } = {}): Promise<any> {
+    let token = await this.getValidAccessToken();
+    const url = endpoint.startsWith("http") ? endpoint : `${this.baseUrl}${endpoint}`;
+
+    let res = await requestUrl({
+      url,
+      method: options.method || "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      throw: false
+    });
+
+    if (res.status === 401 && this.tokenSet?.refresh_token) {
+      token = await this.refreshAccessToken();
+      res = await requestUrl({
+        url,
+        method: options.method || "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        throw: false
+      });
+    }
+
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`Plaud API error ${res.status} on ${endpoint}: ${res.text}`);
+    }
+
+    return res.json;
+  }
+
+  public async listFiles(pageSize = 100): Promise<PlaudFileItem[]> {
+    let allFiles: PlaudFileItem[] = [];
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const endpoint = `/open/third-party/files/?page=${page}&page_size=${pageSize}`;
+      const data = await this.request(endpoint);
+
+      const items = data.data?.items || data.data?.file_list || data.data || [];
+      if (!Array.isArray(items) || items.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      allFiles.push(...items);
+
+      const total = data.data?.total || data.total || 0;
+      if (allFiles.length >= total || items.length < pageSize) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+    }
+
+    return allFiles;
+  }
+
+  public async getFileDetail(fileId: string): Promise<any> {
+    const raw = await this.request(`/open/third-party/files/${fileId}`);
+    const data = raw.data || raw;
+
+    if (data.data_link) {
+      try {
+        const linkRes = await requestUrl({ url: data.data_link, throw: false });
+        if (linkRes.status === 200) {
+          const payload = linkRes.json;
+          return { ...data, payload };
+        }
+      } catch (err: any) {
+        console.warn(`Failed to resolve data_link for ${fileId}: ${err.message}`);
+      }
+    }
+
+    return data;
+  }
+
+  public async downloadAudioBuffer(fileId: string, directUrl?: string): Promise<ArrayBuffer> {
+    let downloadUrl = directUrl;
+
+    if (!downloadUrl) {
+      const audioInfo = await this.request(`/open/third-party/files/${fileId}/audio`);
+      downloadUrl = audioInfo.data?.url || audioInfo.data?.audio_url || audioInfo.url;
+    }
+
+    if (!downloadUrl) {
+      throw new Error(`No audio download URL returned for file ${fileId}`);
+    }
+
+    const res = await requestUrl({
+      url: downloadUrl,
+      throw: false
+    });
+
+    if (res.status !== 200) {
+      throw new Error(`Failed to download audio from ${downloadUrl} (HTTP ${res.status})`);
+    }
+
+    return res.arrayBuffer;
+  }
+}

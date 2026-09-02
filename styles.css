@@ -1,0 +1,25 @@
+/* Plaud Sync Obsidian Plugin Styles */
+
+.plaud-auth-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+
+.plaud-auth-connected {
+  background-color: rgba(38, 166, 91, 0.15);
+  color: var(--text-success, #2ecc71);
+}
+
+.plaud-auth-disconnected {
+  background-color: rgba(231, 76, 60, 0.15);
+  color: var(--text-error, #e74c3c);
+}
+
+.plaud-sync-progress {
+  font-size: 0.9em;
+  color: var(--text-muted);
+}
