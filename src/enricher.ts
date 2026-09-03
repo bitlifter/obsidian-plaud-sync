@@ -383,6 +383,202 @@ Respond with ONLY a valid JSON object in this exact schema:
   };
 }
 
+export async function resolveSpeakersOpenAICompatible(
+  transcriptSegments: TranscriptSegment[] = [],
+  summaryContent = "",
+  title = "",
+  baseUrl = "http://localhost:11434/v1",
+  apiKey = "",
+  model = "llama3.1"
+): Promise<SpeakerResolution> {
+  const speakers = Array.from(
+    new Set(transcriptSegments.map(s => s.speaker).filter(Boolean) as string[])
+  );
+
+  const sampleTurns: TranscriptSegment[] = [];
+  sampleTurns.push(...transcriptSegments.slice(0, 15));
+
+  for (const spk of speakers) {
+    if (!sampleTurns.some(t => t.speaker === spk)) {
+      const spkTurns = transcriptSegments
+        .filter(t => t.speaker === spk && t.content)
+        .sort((a, b) => (b.content?.length || 0) - (a.content?.length || 0))
+        .slice(0, 4);
+      sampleTurns.push(...spkTurns);
+    }
+  }
+
+  const sampleDialogue = sampleTurns
+    .map((s, idx) => `[${idx}] ${s.speaker}: "${s.content}"`)
+    .join("\n");
+
+  const speakerListStr = speakers.length > 0 ? speakers.join(", ") : "Speaker 1, Speaker 2";
+  const prompt = `You are an expert executive meeting intelligence assistant.
+Your task is to identify the real names of EVERY speaker (${speakerListStr}) in this transcript and summary.
+
+Meeting Title: ${title}
+
+Meeting Summary & Action Items:
+${summaryContent.slice(0, 4000)}
+
+Dialogue Excerpt:
+${sampleDialogue.slice(0, 6000)}
+
+DISAMBIGUATION & IDENTIFICATION RULES:
+1. Pay careful attention to conversational grammar:
+   - When Speaker A says "Good morning Bob", the person being addressed (Speaker B) is Bob, NOT Speaker A.
+   - When Speaker A says "David Smith here", Speaker A is David Smith.
+   - When someone says "Alex and Charlie have joined", and one says "Alex here", the other who joined is Charlie.
+2. Cross-reference with Action Items and Summary to map each speaker (${speakerListStr}) to their real name.
+3. Extract real full or first names of real humans who participated. Do NOT include phrases, verbs, or "Speaker".
+4. Extract organizations mentioned.
+
+Respond strictly with ONLY a JSON object (no explanations, no code block markers if possible) in this exact schema:
+{
+  "speakerMap": { "Speaker 1": "Real Name", "Speaker 2": "Real Name" },
+  "people": ["Name 1", "Name 2"],
+  "organizations": ["Org 1", "Org 2"],
+  "confidence": 0.95
+}`;
+
+  const cleanBase = (baseUrl || "http://localhost:11434/v1").replace(/\/+$/, "");
+  const url = `${cleanBase}/chat/completions`;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
+
+  let response = await requestUrl({
+    url,
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: model || "llama3.1",
+      messages: [
+        {
+          role: "system",
+          content: "You are an executive meeting intelligence analyst. You respond only with valid JSON."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: 0.1,
+      response_format: { type: "json_object" }
+    }),
+    throw: false
+  });
+
+  if (response.status === 400 && response.text?.includes("response_format")) {
+    response = await requestUrl({
+      url,
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: model || "llama3.1",
+        messages: [
+          {
+            role: "system",
+            content: "You are an executive meeting intelligence analyst. You respond strictly with valid JSON without markdown formatting."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        temperature: 0.1
+      }),
+      throw: false
+    });
+  }
+
+  if (response.status !== 200) {
+    throw new Error(`OpenAI-compatible error ${response.status}: ${response.text}`);
+  }
+
+  const data = response.json;
+  const textContent = data.choices?.[0]?.message?.content;
+  if (!textContent) throw new Error("Empty completion response from OpenAI-compatible endpoint");
+
+  let cleanJson = textContent.trim();
+  if (cleanJson.startsWith("```json")) {
+    cleanJson = cleanJson.replace(/^```json\s*/, "").replace(/```$/, "").trim();
+  } else if (cleanJson.startsWith("```")) {
+    cleanJson = cleanJson.replace(/^```\s*/, "").replace(/```$/, "").trim();
+  }
+
+  const parsed = JSON.parse(cleanJson);
+  const orgs = Array.isArray(parsed.organizations) ? parsed.organizations : [];
+  if (orgs.length > 0) {
+    await saveLearnedOrganizations(orgs);
+  }
+
+  const speakerMap = parsed.speakerMap || {};
+  const people = sanitizePeopleList(parsed.people || Object.values(speakerMap));
+
+  return {
+    speakerMap,
+    people,
+    organizations: orgs,
+    confidence: parsed.confidence || 0.9,
+    source: "openai_compatible"
+  };
+}
+
+export async function testOpenAIConnection(baseUrl: string, apiKey: string, model: string): Promise<string> {
+  const cleanBase = (baseUrl || "http://localhost:11434/v1").replace(/\/+$/, "");
+  const url = `${cleanBase}/chat/completions`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
+
+  const response = await requestUrl({
+    url,
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: model || "llama3.1",
+      messages: [{ role: "user", content: "Say OK" }],
+      max_tokens: 10
+    }),
+    throw: false
+  });
+
+  if (response.status !== 200) {
+    throw new Error(`HTTP ${response.status}: ${response.text}`);
+  }
+
+  const data = response.json;
+  const reply = data.choices?.[0]?.message?.content || "Connected";
+  return reply.trim();
+}
+
+export async function testGeminiConnection(apiKey: string, model: string): Promise<string> {
+  const selectedModel = model || "gemini-3.6-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${apiKey}`;
+  const response = await requestUrl({
+    url,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: "Say OK" }] }]
+    }),
+    throw: false
+  });
+
+  if (response.status !== 200) {
+    throw new Error(`HTTP ${response.status}: ${response.text}`);
+  }
+  return "Connected successfully";
+}
+
 export interface AudioTranscriptionResult {
   summaryContent: string;
   outlineText: string;
@@ -472,8 +668,12 @@ export async function enrichMeetingData({
   transcriptSegments = [],
   summaryContent = "",
   title = "",
+  aiProvider = "gemini",
   geminiApiKey = "",
   geminiModel = "gemini-3.6-flash",
+  openaiBaseUrl = "http://localhost:11434/v1",
+  openaiApiKey = "",
+  openaiModel = "llama3.1",
   minConfidence = 0.70,
   forceCloud = false,
   customOrgs = ""
@@ -481,14 +681,38 @@ export async function enrichMeetingData({
   transcriptSegments?: TranscriptSegment[];
   summaryContent?: string;
   title?: string;
+  aiProvider?: "gemini" | "openai_compatible";
   geminiApiKey?: string;
   geminiModel?: string;
+  openaiBaseUrl?: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
   minConfidence?: number;
   forceCloud?: boolean;
   customOrgs?: string;
 }): Promise<SpeakerResolution> {
-  // 1. If Gemini API key is available, use Gemini for high quality intelligence
-  if (geminiApiKey) {
+  // 1. If OpenAI-compatible provider is selected
+  if (aiProvider === "openai_compatible" && openaiBaseUrl) {
+    try {
+      const result = await resolveSpeakersOpenAICompatible(
+        transcriptSegments,
+        summaryContent,
+        title,
+        openaiBaseUrl,
+        openaiApiKey,
+        openaiModel
+      );
+      return {
+        ...result,
+        people: sanitizePeopleList(result.people || [])
+      };
+    } catch (err: any) {
+      console.warn(`OpenAI-compatible enrichment failed: ${err.message}. Falling back to heuristic.`);
+    }
+  }
+
+  // 2. If Gemini provider is selected and API key is available
+  if (aiProvider === "gemini" && geminiApiKey) {
     try {
       const geminiResult = await resolveSpeakersGemini(
         transcriptSegments,
@@ -506,6 +730,6 @@ export async function enrichMeetingData({
     }
   }
 
-  // 2. Strict offline heuristic fallback
+  // 3. Strict offline heuristic fallback
   return await resolveSpeakersHeuristic(transcriptSegments, summaryContent, title, customOrgs);
 }

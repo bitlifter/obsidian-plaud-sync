@@ -263,8 +263,12 @@ export class PlaudSyncEngine {
               transcriptSegments,
               summaryContent,
               title: rawTitle,
+              aiProvider: this.settings.aiProvider,
               geminiApiKey: this.settings.geminiApiKey,
               geminiModel: this.settings.geminiModel,
+              openaiBaseUrl: this.settings.openaiBaseUrl,
+              openaiApiKey: this.settings.openaiApiKey,
+              openaiModel: this.settings.openaiModel,
               minConfidence: this.settings.minConfidence,
               forceCloud: this.settings.forceCloud,
               customOrgs: this.settings.customOrgs

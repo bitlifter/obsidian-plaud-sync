@@ -1,9 +1,15 @@
+export type AIProvider = "gemini" | "openai_compatible";
+
 export interface PlaudPluginSettings {
   targetNotesFolder: string;
   targetAttachmentsFolder: string;
   downloadAudio: boolean;
+  aiProvider: AIProvider;
   geminiApiKey: string;
   geminiModel: string;
+  openaiBaseUrl: string;
+  openaiApiKey: string;
+  openaiModel: string;
   minConfidence: number;
   forceCloud: boolean;
   customOrgs: string;
@@ -21,8 +27,12 @@ export const DEFAULT_SETTINGS: PlaudPluginSettings = {
   targetNotesFolder: "Notes",
   targetAttachmentsFolder: "Attachments",
   downloadAudio: true,
+  aiProvider: "gemini",
   geminiApiKey: "",
   geminiModel: "gemini-3.6-flash",
+  openaiBaseUrl: "http://localhost:11434/v1",
+  openaiApiKey: "",
+  openaiModel: "llama3.1",
   minConfidence: 0.70,
   forceCloud: false,
   customOrgs: "",

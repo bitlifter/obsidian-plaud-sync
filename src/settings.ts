@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
 import PlaudPlugin from "./main";
+import { testGeminiConnection, testOpenAIConnection } from "./enricher";
 
 export class PlaudSettingTab extends PluginSettingTab {
   private plugin: PlaudPlugin;
@@ -91,38 +92,140 @@ export class PlaudSettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "AI Speaker & Entity Enrichment" });
 
     new Setting(containerEl)
-      .setName("Gemini API Key")
-      .setDesc("Optional: Google AI Studio key for Gemini speaker disambiguation and entity extraction.")
-      .addText(text => {
-        text.inputEl.type = "password";
-        text
-          .setPlaceholder("AIzaSy...")
-          .setValue(this.plugin.settings.geminiApiKey)
+      .setName("AI Provider")
+      .setDesc("Choose your AI provider for speaker disambiguation, entity extraction, and transcription fallback.")
+      .addDropdown(drop => {
+        drop
+          .addOption("gemini", "Google Gemini")
+          .addOption("openai_compatible", "Custom OpenAI-Compatible (Ollama, LM Studio, vLLM, OpenRouter, Groq, OpenAI)")
+          .setValue(this.plugin.settings.aiProvider || "gemini")
           .onChange(async val => {
-            this.plugin.settings.geminiApiKey = val.trim();
+            this.plugin.settings.aiProvider = val as any;
             await this.plugin.saveSettings();
+            this.display();
           });
       });
 
-    new Setting(containerEl)
-      .setName("Gemini Model")
-      .setDesc("Model used for speaker diarization, attendee detection, and transcription fallback.")
-      .addDropdown(drop => {
-        drop
-          .addOption("gemini-3.6-flash", "Gemini 3.6 Flash (Recommended - fast, high precision, ~$0.0002/note)")
-          .addOption("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite (Ultra low cost, ~$0.00007/note)")
-          .addOption("gemini-2.5-flash", "Gemini 2.5 Flash (Legacy stable)")
-          .addOption("gemini-3.5-transcribe", "Gemini 3.5 Transcribe (Audio transcription specialized)")
-          .setValue(this.plugin.settings.geminiModel || "gemini-3.6-flash")
-          .onChange(async val => {
-            this.plugin.settings.geminiModel = val;
-            await this.plugin.saveSettings();
+    if (this.plugin.settings.aiProvider === "gemini") {
+      new Setting(containerEl)
+        .setName("Gemini API Key")
+        .setDesc("Google AI Studio key for Gemini speaker disambiguation and entity extraction.")
+        .addText(text => {
+          text.inputEl.type = "password";
+          text
+            .setPlaceholder("AIzaSy...")
+            .setValue(this.plugin.settings.geminiApiKey)
+            .onChange(async val => {
+              this.plugin.settings.geminiApiKey = val.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("Gemini Model")
+        .setDesc("Model used for speaker diarization, attendee detection, and transcription fallback.")
+        .addDropdown(drop => {
+          drop
+            .addOption("gemini-3.6-flash", "Gemini 3.6 Flash (Recommended - fast, high precision, ~$0.0002/note)")
+            .addOption("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite (Ultra low cost, ~$0.00007/note)")
+            .addOption("gemini-2.5-flash", "Gemini 2.5 Flash (Legacy stable)")
+            .addOption("gemini-3.5-transcribe", "Gemini 3.5 Transcribe (Audio transcription specialized)")
+            .setValue(this.plugin.settings.geminiModel || "gemini-3.6-flash")
+            .onChange(async val => {
+              this.plugin.settings.geminiModel = val;
+              await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("Test Gemini Connection")
+        .setDesc("Verify that your Gemini API key and model are reachable.")
+        .addButton(btn => {
+          btn.setButtonText("Test Connection").onClick(async () => {
+            if (!this.plugin.settings.geminiApiKey) {
+              new Notice("⚠️ Please enter a Gemini API Key first.");
+              return;
+            }
+            btn.setButtonText("Testing...").setDisabled(true);
+            try {
+              await testGeminiConnection(
+                this.plugin.settings.geminiApiKey,
+                this.plugin.settings.geminiModel
+              );
+              new Notice("✓ Successfully connected to Google Gemini!");
+            } catch (e: any) {
+              new Notice(`✗ Gemini connection failed: ${e.message}`);
+            } finally {
+              btn.setButtonText("Test Connection").setDisabled(false);
+            }
           });
-      });
+        });
+    } else {
+      new Setting(containerEl)
+        .setName("Endpoint Base URL")
+        .setDesc("Base URL of your OpenAI-compatible API (e.g. http://localhost:11434/v1 for Ollama, http://localhost:1234/v1 for LM Studio, https://api.openai.com/v1 for OpenAI, https://openrouter.ai/api/v1 for OpenRouter).")
+        .addText(text => {
+          text
+            .setPlaceholder("http://localhost:11434/v1")
+            .setValue(this.plugin.settings.openaiBaseUrl || "http://localhost:11434/v1")
+            .onChange(async val => {
+              this.plugin.settings.openaiBaseUrl = val.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("API Key")
+        .setDesc("API key for the custom endpoint. Leave blank for local Ollama / LM Studio without authentication.")
+        .addText(text => {
+          text.inputEl.type = "password";
+          text
+            .setPlaceholder("sk-... (optional for local)")
+            .setValue(this.plugin.settings.openaiApiKey || "")
+            .onChange(async val => {
+              this.plugin.settings.openaiApiKey = val.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("Model Name")
+        .setDesc("Model identifier (e.g. llama3.1, mistral, gpt-4o-mini, qwen2.5, hermes-3).")
+        .addText(text => {
+          text
+            .setPlaceholder("llama3.1")
+            .setValue(this.plugin.settings.openaiModel || "llama3.1")
+            .onChange(async val => {
+              this.plugin.settings.openaiModel = val.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("Test Endpoint Connection")
+        .setDesc("Verify that your custom endpoint and model are reachable.")
+        .addButton(btn => {
+          btn.setButtonText("Test Connection").onClick(async () => {
+            btn.setButtonText("Testing...").setDisabled(true);
+            try {
+              const res = await testOpenAIConnection(
+                this.plugin.settings.openaiBaseUrl,
+                this.plugin.settings.openaiApiKey,
+                this.plugin.settings.openaiModel
+              );
+              new Notice(`✓ Connected to endpoint! Model replied: "${res}"`);
+            } catch (e: any) {
+              new Notice(`✗ Endpoint connection failed: ${e.message}`);
+            } finally {
+              btn.setButtonText("Test Connection").setDisabled(false);
+            }
+          });
+        });
+    }
 
     new Setting(containerEl)
       .setName("Confidence Threshold")
-      .setDesc("If offline heuristic confidence falls below this value (0.1 to 1.0), Gemini will be invoked.")
+      .setDesc("If offline heuristic confidence falls below this value (0.1 to 1.0), the AI provider will be invoked.")
       .addSlider(slider =>
         slider
           .setLimits(0.1, 1.0, 0.05)
@@ -135,8 +238,8 @@ export class PlaudSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Force Cloud Enrichment")
-      .setDesc("Always invoke Gemini 3.6 Flash for all meetings with transcript data.")
+      .setName("Force Cloud / Custom AI Enrichment")
+      .setDesc("Always invoke the selected AI provider for all meetings with transcript data.")
       .addToggle(toggle =>
         toggle
           .setValue(this.plugin.settings.forceCloud)
