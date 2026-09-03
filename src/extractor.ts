@@ -1,4 +1,5 @@
 import { TranscriptSegment } from "./types";
+import { sanitizePeopleList } from "./enricher";
 
 export function sanitizeFilename(name: string, maxLength = 100): string {
   if (!name || !name.trim()) return "Untitled Recording";
@@ -168,11 +169,16 @@ export function extractAutoSumNotes(fileDetail: any): {
     /(?:Participants|Attendees|Present|Meeting with):\s*([^\n\r]+)/i
   );
   if (partMatch) {
-    const raw = partMatch[1].split(/[,;&]|\band\b/i);
-    for (const p of raw) {
-      const clean = p.replace(/\[\[|\]\]/g, "").trim();
-      if (clean && !clean.match(/^Speaker \d+$/i)) {
-        participantsFromNote.push(clean);
+    const line = partMatch[1];
+    const bracketMatches = Array.from(line.matchAll(/\[([^\]]+)\]/g));
+    if (bracketMatches.length > 0) {
+      for (const m of bracketMatches) {
+        participantsFromNote.push(m[1].trim());
+      }
+    } else {
+      const raw = line.split(/[,;&]|\band\b/i);
+      for (const p of raw) {
+        participantsFromNote.push(p.trim());
       }
     }
   }
@@ -180,7 +186,7 @@ export function extractAutoSumNotes(fileDetail: any): {
   return {
     summaryContent: combinedSummary,
     outlineText,
-    participantsFromNote
+    participantsFromNote: sanitizePeopleList(participantsFromNote)
   };
 }
 
@@ -214,9 +220,10 @@ export function buildKepanoFrontmatter({
   lines.push(`categories:`);
   lines.push(`  - "[[Meetings]]"`);
 
-  if (people && people.length > 0) {
+  const cleanPeople = sanitizePeopleList(people);
+  if (cleanPeople.length > 0) {
     lines.push(`people:`);
-    for (const p of people) {
+    for (const p of cleanPeople) {
       lines.push(`  - "[[${p}]]"`);
     }
   }

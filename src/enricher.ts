@@ -4,8 +4,8 @@ import * as path from "path";
 import * as fsPromises from "fs/promises";
 import { SpeakerResolution, TranscriptSegment } from "./types";
 
-const COMMON_WORDS_NOT_NAMES = new Set([
-  "I", "A", "And", "Or", "But", "If", "So", "Then", "No", "Yes", "Yeah", "Okay",
+export const COMMON_WORDS_NOT_NAMES = new Set([
+  "I", "A", "An", "The", "And", "Or", "But", "If", "So", "Then", "No", "Yes", "Yeah", "Okay",
   "Right", "Well", "Just", "Like", "Sure", "Thanks", "Thank", "Hello", "Hey",
   "Hi", "Sorry", "Please", "Actually", "Basically", "Obviously", "Honestly",
   "Definitely", "Totally", "Look", "Listen", "See", "Wait", "Hold", "Good",
@@ -20,8 +20,46 @@ const COMMON_WORDS_NOT_NAMES = new Set([
   "Target", "Targets", "Strategy", "Objective", "Objectives", "Issue", "Issues",
   "Conclusion", "Description", "Next", "Arrangements", "Agreement", "Client",
   "Customer", "Partner", "Partners", "Vendor", "Executive", "Director", "VP", "CEO",
-  "CTO", "CIO", "Engineering", "Commercial", "Product", "Support", "Finance"
+  "CTO", "CIO", "Engineering", "Commercial", "Product", "Support", "Finance",
+  "Going", "Trying", "Convenient", "Feeling", "Annoying", "Based", "Pointing",
+  "Fake", "Serious", "Curious", "Wondering", "Thinking", "Working", "Looking",
+  "Starting", "Talking", "Asking", "Telling", "Saying", "Doing", "Having",
+  "Getting", "Making", "Taking", "Coming", "Seeing", "Knowing", "Giving",
+  "Finding", "Becoming", "Showing", "Leaving", "Putting", "Bringing", "Beginning",
+  "Holding", "Writing", "Standing", "Hearing", "Letting", "Meaning", "Setting",
+  "Running", "Here", "There", "Where", "When", "What", "Who", "Why", "How",
+  "This", "That", "These", "Those", "Some", "Many", "Much", "More", "Most",
+  "Very", "Really", "Too", "Also", "Only", "Never", "Always", "Often",
+  "Can", "Could", "Will", "Would", "Shall", "Should", "May", "Might", "Must"
 ]);
+
+export function isValidPersonName(name: string): boolean {
+  if (!name || typeof name !== "string") return false;
+  const clean = name.replace(/[\[\]]/g, "").trim();
+  if (clean.length < 2 || clean.length > 35) return false;
+  if (/^Speaker\s*\d+$/i.test(clean) || clean.toLowerCase().includes("speaker")) return false;
+  if (!/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}$/.test(clean)) return false;
+
+  const words = clean.split(/\s+/);
+  for (const w of words) {
+    const titleCased = w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    if (COMMON_WORDS_NOT_NAMES.has(titleCased)) return false;
+  }
+  return true;
+}
+
+export function sanitizePeopleList(people: string[]): string[] {
+  if (!Array.isArray(people)) return [];
+  const cleanSet = new Set<string>();
+  for (const p of people) {
+    if (!p) continue;
+    const clean = p.replace(/[\[\]]/g, "").trim();
+    if (isValidPersonName(clean)) {
+      cleanSet.add(clean);
+    }
+  }
+  return Array.from(cleanSet).sort();
+}
 
 const ORGS_CACHE_PATH = path.join(os.homedir(), ".plaud", "known_organizations.json");
 
@@ -141,7 +179,7 @@ export async function resolveSpeakersHeuristic(
   function scoreName(speaker: string, name: string, weight = 1.0) {
     if (!speaker || !name) return;
     const clean = name.trim();
-    if (clean.length < 2 || COMMON_WORDS_NOT_NAMES.has(clean)) return;
+    if (!isValidPersonName(clean)) return;
     if (orgNamesSet.has(clean.toLowerCase()) || orgWordsSet.has(clean.toLowerCase())) return;
 
     if (!candidateScores[speaker]) candidateScores[speaker] = {};
@@ -154,15 +192,22 @@ export async function resolveSpeakersHeuristic(
   );
   const detectedAttendees = new Set<string>();
   if (participantMatch) {
-    const rawList = participantMatch[1].split(/[,;&]|\band\b/i);
-    for (const item of rawList) {
-      const trimmed = item.replace(/\[\[|\]\]/g, "").trim();
-      if (
-        trimmed &&
-        !COMMON_WORDS_NOT_NAMES.has(trimmed) &&
-        !orgNamesSet.has(trimmed.toLowerCase())
-      ) {
-        detectedAttendees.add(trimmed);
+    const line = participantMatch[1];
+    const bracketMatches = Array.from(line.matchAll(/\[([^\]]+)\]/g));
+    if (bracketMatches.length > 0) {
+      for (const m of bracketMatches) {
+        const item = m[1].trim();
+        if (isValidPersonName(item) && !orgNamesSet.has(item.toLowerCase())) {
+          detectedAttendees.add(item);
+        }
+      }
+    } else {
+      const rawList = line.split(/[,;&]|\band\b/i);
+      for (const item of rawList) {
+        const clean = item.replace(/[\[\]]/g, "").trim();
+        if (isValidPersonName(clean) && !orgNamesSet.has(clean.toLowerCase())) {
+          detectedAttendees.add(clean);
+        }
       }
     }
   }
@@ -173,19 +218,19 @@ export async function resolveSpeakersHeuristic(
     const spk = turn.speaker || "Speaker";
     const text = turn.content || "";
 
-    // Self-identification
+    // Self-identification (case-sensitive on name)
     const selfIdMatch = text.match(
-      /\b(?:This is|I am|I'm|It's|Here is)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\b/i
+      /\b(?:This is|I am|I'm|Here is|My name is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/
     );
-    if (selfIdMatch) {
+    if (selfIdMatch && isValidPersonName(selfIdMatch[1])) {
       scoreName(spk, selfIdMatch[1], 10.0);
     }
 
-    // Direct address
+    // Direct address (case-sensitive on name)
     const vocativeMatch = text.match(
-      /\b(?:Thanks|Thank you|Hi|Hello|Hey|Good morning|Good afternoon)\s*,?\s+([A-Z][a-zA-Z]+)\b/i
+      /\b(?:Thanks|Thank you|Hi|Hello|Hey|Good morning|Good afternoon)\s*,?\s+([A-Z][a-z]+)\b/
     );
-    if (vocativeMatch) {
+    if (vocativeMatch && isValidPersonName(vocativeMatch[1])) {
       const addressedName = vocativeMatch[1];
       if (i > 0) {
         const prevSpeaker = transcriptSegments[i - 1].speaker;
@@ -435,12 +480,7 @@ export async function enrichMeetingData({
   forceCloud?: boolean;
   customOrgs?: string;
 }): Promise<SpeakerResolution> {
-  const heuristicResult = await resolveSpeakersHeuristic(transcriptSegments, summaryContent, title, customOrgs);
-
-  if (!forceCloud && heuristicResult.confidence >= minConfidence) {
-    return heuristicResult;
-  }
-
+  // 1. If Gemini API key is available, use Gemini for high quality intelligence
   if (geminiApiKey) {
     try {
       const geminiResult = await resolveSpeakersGemini(
@@ -451,13 +491,13 @@ export async function enrichMeetingData({
       );
       return {
         ...geminiResult,
-        organizations: Array.from(new Set([...heuristicResult.organizations, ...geminiResult.organizations])),
-        people: Array.from(new Set([...heuristicResult.people, ...geminiResult.people]))
+        people: sanitizePeopleList(geminiResult.people || [])
       };
     } catch (err: any) {
       console.warn(`Gemini enrichment failed: ${err.message}. Falling back to heuristic.`);
     }
   }
 
-  return heuristicResult;
+  // 2. Strict offline heuristic fallback
+  return await resolveSpeakersHeuristic(transcriptSegments, summaryContent, title, customOrgs);
 }
