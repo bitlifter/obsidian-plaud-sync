@@ -733,3 +733,143 @@ export async function enrichMeetingData({
   // 3. Strict offline heuristic fallback
   return await resolveSpeakersHeuristic(transcriptSegments, summaryContent, title, customOrgs);
 }
+
+export async function summarizeTranscript({
+  transcriptSegments = [],
+  title = "Local Meeting",
+  aiProvider = "gemini",
+  geminiApiKey = "",
+  geminiModel = "gemini-3.6-flash",
+  openaiBaseUrl = "http://localhost:11434/v1",
+  openaiApiKey = "",
+  openaiModel = "llama3.1",
+  customOrgs = ""
+}: {
+  transcriptSegments?: TranscriptSegment[];
+  title?: string;
+  aiProvider?: "gemini" | "openai_compatible";
+  geminiApiKey?: string;
+  geminiModel?: string;
+  openaiBaseUrl?: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
+  customOrgs?: string;
+}): Promise<{
+  summaryContent: string;
+  outlineText: string;
+  people: string[];
+  organizations: string[];
+  speakerMap: Record<string, string>;
+}> {
+  const fullDialogue = transcriptSegments
+    .map(s => `${s.speaker || "Speaker"}: ${s.content}`)
+    .join("\n");
+
+  const prompt = `You are an expert executive meeting assistant.
+Analyze this meeting transcript and produce a comprehensive, structured meeting summary in Obsidian Markdown format.
+
+Meeting Title: ${title}
+
+Transcript:
+${fullDialogue.slice(0, 80000)}
+
+Respond strictly with ONLY a JSON object adhering to this schema:
+{
+  "summary": "2-3 paragraph executive summary of key discussion points, context, and outcomes.",
+  "outline": "### Key Discussion Topics\\n- Topic 1\\n- Topic 2\\n\\n### Decisions Made\\n- Decision 1\\n\\n### Action Items\\n- [ ] Task 1 (Assignee)\\n- [ ] Task 2 (Assignee)",
+  "people": ["Alice Smith", "Bob Jones"],
+  "organizations": ["Company A"],
+  "speakerMap": { "Speaker 1": "Alice Smith" }
+}`;
+
+  // 1. Try OpenAI-compatible endpoint
+  if (aiProvider === "openai_compatible" && openaiBaseUrl) {
+    try {
+      const cleanBase = openaiBaseUrl.replace(/\/+$/, "");
+      const res = await requestUrl({
+        url: `${cleanBase}/chat/completions`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(openaiApiKey ? { "Authorization": `Bearer ${openaiApiKey}` } : {})
+        },
+        body: JSON.stringify({
+          model: openaiModel || "llama3.1",
+          messages: [
+            { role: "system", content: "You are a meeting summarization engine. You output strictly valid JSON." },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.2
+        }),
+        throw: false
+      });
+
+      if (res.status === 200) {
+        let content = res.json?.choices?.[0]?.message?.content || "";
+        content = content.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
+        const parsed = JSON.parse(content);
+        const orgs = Array.isArray(parsed.organizations) ? parsed.organizations : [];
+        if (orgs.length > 0) await saveLearnedOrganizations(orgs);
+        return {
+          summaryContent: parsed.summary || "",
+          outlineText: parsed.outline || "",
+          people: sanitizePeopleList(parsed.people || []),
+          organizations: orgs,
+          speakerMap: parsed.speakerMap || {}
+        };
+      }
+    } catch (e: any) {
+      console.warn("OpenAI-compatible summarization failed, falling back:", e.message);
+    }
+  }
+
+  // 2. Try Gemini
+  if (geminiApiKey) {
+    try {
+      const selectedModel = geminiModel || "gemini-3.6-flash";
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${geminiApiKey}`;
+      const res = await requestUrl({
+        url,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.2
+          }
+        }),
+        throw: false
+      });
+
+      if (res.status === 200) {
+        const textContent = res.json?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (textContent) {
+          const parsed = JSON.parse(textContent);
+          const orgs = Array.isArray(parsed.organizations) ? parsed.organizations : [];
+          if (orgs.length > 0) await saveLearnedOrganizations(orgs);
+          return {
+            summaryContent: parsed.summary || "",
+            outlineText: parsed.outline || "",
+            people: sanitizePeopleList(parsed.people || []),
+            organizations: orgs,
+            speakerMap: parsed.speakerMap || {}
+          };
+        }
+      }
+    } catch (e: any) {
+      console.warn("Gemini summarization failed, falling back to heuristic:", e.message);
+    }
+  }
+
+  // 3. Fallback: heuristic attendee extraction & basic outline
+  const heuristic = await resolveSpeakersHeuristic(transcriptSegments, "", title, customOrgs);
+  return {
+    summaryContent: "Meeting transcribed locally via whisper.cpp.",
+    outlineText: "### Summary\n- Meeting transcribed from local audio.",
+    people: heuristic.people,
+    organizations: heuristic.organizations,
+    speakerMap: heuristic.speakerMap
+  };
+}
+

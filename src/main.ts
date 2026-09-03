@@ -1,4 +1,4 @@
-import { App, Modal, Plugin } from "obsidian";
+import { App, Modal, Plugin, TFile, Notice } from "obsidian";
 import { PlaudPluginSettings, DEFAULT_SETTINGS } from "./types";
 import { PlaudSyncEngine } from "./sync-engine";
 import { PlaudSettingTab } from "./settings";
@@ -105,6 +105,34 @@ export default class PlaudPlugin extends Plugin {
         new SyncLogModal(this.app, logs).open();
       }
     });
+
+    this.addCommand({
+      id: "plaud-process-inbox",
+      name: "Process local audio inbox with Whisper",
+      callback: async () => {
+        await this.syncEngine.processLocalAudioInbox();
+      }
+    });
+
+    // File Context Menu: Transcribe any audio file
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (file instanceof TFile && ["mp3", "wav", "m4a", "webm", "aac", "ogg"].includes(file.extension.toLowerCase())) {
+          menu.addItem(item => {
+            item
+              .setTitle("Transcribe with Local Whisper")
+              .setIcon("mic")
+              .onClick(async () => {
+                try {
+                  await this.syncEngine.transcribeLocalAudioFile(file);
+                } catch (e: any) {
+                  new Notice(`Transcription failed: ${e.message}`, 6000);
+                }
+              });
+          });
+        }
+      })
+    );
 
     // 3. Settings Tab
     this.addSettingTab(new PlaudSettingTab(this.app, this));

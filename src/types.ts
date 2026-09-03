@@ -1,9 +1,16 @@
 export type AIProvider = "gemini" | "openai_compatible";
+export type TranscriptionEngine = "plaud_cloud" | "whisper_cpp";
+export type WhisperModelKey = "tiny.en" | "base.en" | "small.en" | "large-v3-turbo";
 
 export interface PlaudPluginSettings {
   targetNotesFolder: string;
   targetAttachmentsFolder: string;
   downloadAudio: boolean;
+  transcriptionEngine: TranscriptionEngine;
+  whisperModel: WhisperModelKey;
+  localAudioFolder: string;
+  customWhisperBinaryPath: string;
+  customWhisperModelPath: string;
   aiProvider: AIProvider;
   geminiApiKey: string;
   geminiModel: string;
@@ -27,6 +34,11 @@ export const DEFAULT_SETTINGS: PlaudPluginSettings = {
   targetNotesFolder: "Notes",
   targetAttachmentsFolder: "Attachments",
   downloadAudio: true,
+  transcriptionEngine: "plaud_cloud",
+  whisperModel: "base.en",
+  localAudioFolder: "Attachments/Inbox",
+  customWhisperBinaryPath: "",
+  customWhisperModelPath: "",
   aiProvider: "gemini",
   geminiApiKey: "",
   geminiModel: "gemini-3.6-flash",

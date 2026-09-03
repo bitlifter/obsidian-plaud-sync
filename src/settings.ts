@@ -1,6 +1,13 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
 import PlaudPlugin from "./main";
 import { testGeminiConnection, testOpenAIConnection } from "./enricher";
+import {
+  checkWhisperBinary,
+  checkWhisperModel,
+  downloadAndInstallWhisperEngine,
+  downloadWhisperModel,
+  WHISPER_MODELS
+} from "./whisper-engine";
 
 export class PlaudSettingTab extends PluginSettingTab {
   private plugin: PlaudPlugin;
@@ -88,7 +95,128 @@ export class PlaudSettingTab extends PluginSettingTab {
           })
       );
 
-    // 3. AI Speaker & Entity Resolution
+    // 3. Offline Speech-to-Text (Whisper)
+    containerEl.createEl("h3", { text: "Offline Speech-to-Text (Whisper)" });
+
+    new Setting(containerEl)
+      .setName("Transcription Engine")
+      .setDesc("Choose whether to use Plaud Cloud or local offline Whisper.cpp for audio transcription.")
+      .addDropdown(drop => {
+        drop
+          .addOption("plaud_cloud", "Plaud Cloud (Default)")
+          .addOption("whisper_cpp", "Local Whisper.cpp (100% Offline)")
+          .setValue(this.plugin.settings.transcriptionEngine || "plaud_cloud")
+          .onChange(async val => {
+            this.plugin.settings.transcriptionEngine = val as any;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Local Audio Inbox Folder")
+      .setDesc("Vault folder where local recordings (.mp3, .wav, .m4a) are placed for offline processing.")
+      .addText(text =>
+        text
+          .setPlaceholder("Attachments/Inbox")
+          .setValue(this.plugin.settings.localAudioFolder || "Attachments/Inbox")
+          .onChange(async val => {
+            this.plugin.settings.localAudioFolder = val.trim() || "Attachments/Inbox";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    const pluginDir = this.plugin.syncEngine.getPluginDir();
+    const binInfo = checkWhisperBinary(pluginDir, this.plugin.settings.customWhisperBinaryPath);
+    const modelInfo = checkWhisperModel(
+      this.plugin.settings.whisperModel || "base.en",
+      pluginDir,
+      this.plugin.settings.customWhisperModelPath
+    );
+
+    new Setting(containerEl)
+      .setName("Whisper Model")
+      .setDesc("Select the model size. Base is balanced; Small and Large offer higher accuracy.")
+      .addDropdown(drop => {
+        for (const [key, info] of Object.entries(WHISPER_MODELS)) {
+          drop.addOption(key, info.name);
+        }
+        drop
+          .setValue(this.plugin.settings.whisperModel || "base.en")
+          .onChange(async val => {
+            this.plugin.settings.whisperModel = val as any;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    const statusDesc = [
+      `Engine Binary: ${binInfo.exists ? `✓ Installed (${binInfo.path})` : "✗ Not installed"}`,
+      `Selected Model: ${modelInfo.exists ? `✓ Installed (${modelInfo.path})` : "✗ Not downloaded"}`
+    ].join(" | ");
+
+    const engineSetting = new Setting(containerEl)
+      .setName("Engine & Model Status")
+      .setDesc(statusDesc);
+
+    engineSetting.addButton(btn => {
+      btn
+        .setButtonText(binInfo.exists ? "Reinstall Engine" : "Download Whisper Engine")
+        .onClick(async () => {
+          btn.setButtonText("Downloading...").setDisabled(true);
+          try {
+            await downloadAndInstallWhisperEngine(pluginDir, (msg) => {
+              new Notice(msg, 3000);
+            });
+            new Notice("✓ Whisper engine installed successfully!");
+          } catch (e: any) {
+            new Notice(`✗ Failed to install Whisper engine: ${e.message}`, 8000);
+          } finally {
+            await this.display();
+          }
+        });
+    });
+
+    engineSetting.addButton(btn => {
+      btn
+        .setButtonText(modelInfo.exists ? "Re-download Model" : "Download Model")
+        .onClick(async () => {
+          btn.setButtonText("Downloading...").setDisabled(true);
+          try {
+            const mKey = this.plugin.settings.whisperModel || "base.en";
+            new Notice(`Downloading ${mKey} model (~${WHISPER_MODELS[mKey]?.sizeMb || 140} MB)...`, 5000);
+            await downloadWhisperModel(mKey, pluginDir, (pct) => {
+              if (pct % 20 === 0 || pct === 100) {
+                new Notice(`Downloading ${mKey}: ${pct}%`, 2000);
+              }
+            });
+            new Notice(`✓ Model ${mKey} downloaded successfully!`);
+          } catch (e: any) {
+            new Notice(`✗ Failed to download model: ${e.message}`, 8000);
+          } finally {
+            await this.display();
+          }
+        });
+    });
+
+    new Setting(containerEl)
+      .setName("Process Local Audio Inbox")
+      .setDesc("Transcribe all audio files currently waiting in your local audio inbox folder.")
+      .addButton(btn => {
+        btn
+          .setButtonText("Process Inbox Now")
+          .setCta()
+          .onClick(async () => {
+            btn.setDisabled(true);
+            try {
+              await this.plugin.syncEngine.processLocalAudioInbox();
+            } finally {
+              btn.setDisabled(false);
+            }
+          });
+      });
+
+    // 4. AI Speaker & Entity Resolution
     containerEl.createEl("h3", { text: "AI Speaker & Entity Enrichment" });
 
     new Setting(containerEl)
