@@ -6,6 +6,7 @@ import { SpeakerResolution, TranscriptSegment } from "./types";
 
 export const COMMON_WORDS_NOT_NAMES = new Set([
   "I", "A", "An", "The", "And", "Or", "But", "If", "So", "Then", "No", "Yes", "Yeah", "Okay",
+  "We", "He", "She", "They", "It", "You", "Me", "Us", "Him", "Her", "Them", "My", "Mine", "Our", "Ours", "Your", "Yours", "His", "Hers", "Their", "Theirs", "Its",
   "Right", "Well", "Just", "Like", "Sure", "Thanks", "Thank", "Hello", "Hey",
   "Hi", "Sorry", "Please", "Actually", "Basically", "Obviously", "Honestly",
   "Definitely", "Totally", "Look", "Listen", "See", "Wait", "Hold", "Good",
