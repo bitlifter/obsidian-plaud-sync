@@ -106,7 +106,10 @@ Copy `main.js`, `manifest.json`, and `styles.css` into `<Your-Vault>/.obsidian/p
    - **Local LLM (Ollama / LM Studio)** for 100% offline summarization.
    - **Google Gemini** for cloud summarization.
    - **Heuristic Only** for rule-based speaker detection with zero LLM calls.
-4. Place recordings in your local inbox folder (`Attachments/Inbox`) or right-click any audio file in your vault and click **Transcribe with Local Whisper / Snapdragon NPU**.
+4. **Importing Audio**:
+   - **Plaud Desktop Offline Cache**: If you record with the Plaud Desktop app without cloud sync, recordings are saved as `.ogg` files in `%APPDATA%\ogg-cache\`. Click **Import Cache Recordings** or run `Ctrl+P` $\rightarrow$ **`Plaud: Import recordings from Plaud Desktop cache`**.
+   - **Local Audio Inbox**: Drop any `.mp3`, `.wav`, `.m4a`, or `.ogg` files into `Attachments/Inbox` and click **Process Inbox Now**.
+   - **File Context Menu**: Right-click any audio file anywhere in your vault $\rightarrow$ **Transcribe with Snapdragon NPU / Local Whisper**.
 
 ### Option B: Cloud Sync (Plaud.ai Account)
 1. Authenticate with Plaud on your machine:
@@ -124,7 +127,9 @@ Copy `main.js`, `manifest.json`, and `styles.css` into `<Your-Vault>/.obsidian/p
 | Setting | Default | Description |
 |---|---|---|
 | **Transcription Engine** | `plaud_cloud` | Choose between `Plaud Cloud`, `Local Whisper.cpp (CPU)`, or `Snapdragon NPU (Qualcomm QNN)`. |
-| **Local Audio Inbox Folder** | `Attachments/Inbox` | Vault folder where audio files (.mp3, .wav, .m4a) are placed for offline batch processing. |
+| **Plaud Desktop Cache Directory** | `%APPDATA%\ogg-cache` | Folder where Plaud Desktop saves offline `.ogg` recordings. Supports local paths or network shares. |
+| **Auto-Import Plaud Cache** | `false` | Automatically ingest and transcribe new recordings from the Plaud Desktop cache on startup/sync. |
+| **Local Audio Inbox Folder** | `Attachments/Inbox` | Vault folder where audio files (.mp3, .wav, .m4a, .ogg) are placed for offline batch processing. |
 | **Whisper Model** | `base.en` | Whisper.cpp model size (`tiny.en`, `base.en`, `small.en`, `large-v3-turbo`). |
 | **Snapdragon NPU Model** | `base.en` | Pre-quantized ONNX model for Qualcomm Hexagon NPU (`tiny.en`, `base.en`, `small.en`, `turbo`). |
 | **NPU Power Mode** | `high_performance` | Hexagon NPU power profile (`Burst`, `High Performance`, `Balanced`, `Power Saver`). |

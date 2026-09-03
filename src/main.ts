@@ -128,6 +128,28 @@ export default class PlaudPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "plaud-import-cache",
+      name: "Import recordings from Plaud Desktop cache (%APPDATA%\\ogg-cache)",
+      callback: async () => {
+        await this.syncEngine.importFromPlaudDesktopCache();
+      }
+    });
+
+    this.addCommand({
+      id: "plaud-import-cache-npu",
+      name: "Import from Plaud Desktop cache with Snapdragon NPU (QNN)",
+      callback: async () => {
+        const prev = this.settings.transcriptionEngine;
+        this.settings.transcriptionEngine = "qnn_npu";
+        try {
+          await this.syncEngine.importFromPlaudDesktopCache();
+        } finally {
+          this.settings.transcriptionEngine = prev;
+        }
+      }
+    });
+
     // File Context Menu: Transcribe any audio file
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
@@ -156,14 +178,23 @@ export default class PlaudPlugin extends Plugin {
     this.statusBarItem = this.addStatusBarItem();
     this.updateStatusBar();
 
-    // 5. Auto-sync on startup if enabled
-    if (this.settings.autoSyncOnStartup) {
+    // 5. Auto-sync & auto-import on startup if enabled
+    if (this.settings.autoSyncOnStartup || this.settings.autoImportPlaudCache) {
       this.app.workspace.onLayoutReady(() => {
         setTimeout(async () => {
-          try {
-            await this.syncEngine.syncRecordings();
-          } catch (err) {
-            console.warn("Auto-sync on startup failed:", err);
+          if (this.settings.autoSyncOnStartup) {
+            try {
+              await this.syncEngine.syncRecordings();
+            } catch (err) {
+              console.warn("Auto-sync on startup failed:", err);
+            }
+          }
+          if (this.settings.autoImportPlaudCache) {
+            try {
+              await this.syncEngine.importFromPlaudDesktopCache();
+            } catch (err) {
+              console.warn("Auto-import Plaud cache on startup failed:", err);
+            }
           }
         }, 5000);
       });

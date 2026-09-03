@@ -360,6 +360,62 @@ export class PlaudSettingTab extends PluginSettingTab {
           });
       });
 
+    // Plaud Desktop Offline Cache Integration
+    containerEl.createEl("h4", { text: "Plaud Desktop Offline Cache Integration" });
+
+    const defaultCachePath = this.plugin.syncEngine.getDefaultPlaudCachePath();
+    const currentCachePath = this.plugin.settings.plaudDesktopCachePath || defaultCachePath;
+
+    new Setting(containerEl)
+      .setName("Plaud Desktop Cache Directory")
+      .setDesc("Directory where Plaud Desktop stores offline .ogg recordings. Defaults to %APPDATA%\\ogg-cache (or enter a network share if recorded on another PC).")
+      .addText(text => {
+        text
+          .setPlaceholder(defaultCachePath || "C:\\Users\\<Username>\\AppData\\Roaming\\ogg-cache")
+          .setValue(this.plugin.settings.plaudDesktopCachePath || "")
+          .onChange(async val => {
+            this.plugin.settings.plaudDesktopCachePath = val.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Auto-Import from Cache on Startup / Sync")
+      .setDesc("Automatically scan the Plaud Desktop cache directory for new recordings whenever Obsidian starts or Plaud Sync runs.")
+      .addToggle(toggle => {
+        toggle
+          .setValue(this.plugin.settings.autoImportPlaudCache || false)
+          .onChange(async val => {
+            this.plugin.settings.autoImportPlaudCache = val;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Import from Plaud Desktop Cache Now")
+      .setDesc(`Scan ${currentCachePath || "cache directory"} and transcribe any new .ogg recordings with the active engine.`)
+      .addButton(btn => {
+        btn
+          .setButtonText("Import Cache Recordings")
+          .setCta()
+          .onClick(async () => {
+            btn.setButtonText("Scanning...").setDisabled(true);
+            try {
+              const res = await this.plugin.syncEngine.importFromPlaudDesktopCache({
+                onProgress: (cur, tot, file) => {
+                  btn.setButtonText(`Importing (${cur}/${tot})...`);
+                }
+              });
+              btn.setButtonText(`Done (${res.imported} imported)`);
+              setTimeout(() => {
+                btn.setButtonText("Import Cache Recordings").setDisabled(false);
+              }, 4000);
+            } catch (err: any) {
+              btn.setButtonText("Import Failed").setDisabled(false);
+            }
+          });
+      });
+
     // 4. AI Speaker & Entity Resolution
     containerEl.createEl("h3", { text: "AI Speaker & Entity Enrichment" });
 

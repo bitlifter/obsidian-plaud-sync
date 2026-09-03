@@ -1,5 +1,7 @@
 import { App, Notice, normalizePath, TFile, TFolder } from "obsidian";
 import * as path from "path";
+import * as fsPromises from "fs/promises";
+import { existsSync } from "fs";
 import { PlaudApiClient } from "./plaud-api";
 import { enrichMeetingData, transcribeAudioGemini, summarizeTranscript } from "./enricher";
 import { createTemp16kWavFile } from "./audio-converter";
@@ -527,9 +529,16 @@ export class PlaudSyncEngine {
     });
 
     // 4. Determine date & duration
-    const now = new Date(audioFile.stat.mtime || Date.now());
-    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    let fileDate = new Date(audioFile.stat.mtime || Date.now());
+    if (/^\d{10,13}$/.test(audioFile.basename)) {
+      const num = parseInt(audioFile.basename, 10);
+      const parsedDate = new Date(num > 1e11 ? num : num * 1000);
+      if (!isNaN(parsedDate.getTime()) && parsedDate.getFullYear() > 2020) {
+        fileDate = parsedDate;
+      }
+    }
+    const dateStr = `${fileDate.getFullYear()}-${String(fileDate.getMonth() + 1).padStart(2, "0")}-${String(fileDate.getDate()).padStart(2, "0")}`;
+    const timeStr = `${String(fileDate.getHours()).padStart(2, "0")}:${String(fileDate.getMinutes()).padStart(2, "0")}`;
 
     let totalSeconds = 0;
     if (segments.length > 0 && segments[segments.length - 1].endTime) {
@@ -541,7 +550,12 @@ export class PlaudSyncEngine {
     await this.ensureFolder(this.settings.targetAttachmentsFolder);
     await this.ensureFolder(this.settings.targetNotesFolder);
 
-    const safeAudioBase = sanitizeFilename(rawTitle, 80);
+    let displayTitle = rawTitle;
+    if (summaryResult.title && /^(rec|\d{6,}|audio|sound|recording|track|plaud)/i.test(rawTitle)) {
+      displayTitle = summaryResult.title;
+    }
+
+    const safeAudioBase = sanitizeFilename(displayTitle, 80);
     const audioTargetFilename = `${dateStr} ${safeAudioBase}.${audioFile.extension}`;
     const audioTargetVaultPath = normalizePath(`${this.settings.targetAttachmentsFolder}/${audioTargetFilename}`);
 
@@ -555,7 +569,7 @@ export class PlaudSyncEngine {
     }
 
     // 6. Generate Kepano Markdown Note
-    const noteTitle = formatNoteTitle(dateStr, rawTitle);
+    const noteTitle = formatNoteTitle(dateStr, displayTitle);
     const noteContent = generateKepanoNote({
       title: noteTitle,
       date: dateStr,
@@ -631,5 +645,129 @@ export class PlaudSyncEngine {
 
     new Notice(`Inbox processing complete: ${processed} processed, ${errors} errors.`, 6000);
     return { total: audioFiles.length, processed, errors };
+  }
+
+  /**
+   * Resolves default path for Plaud Desktop offline cache (%APPDATA%\ogg-cache).
+   */
+  public getDefaultPlaudCachePath(): string {
+    if (process.platform === "win32" && process.env.APPDATA) {
+      return path.join(process.env.APPDATA, "ogg-cache");
+    }
+    return "";
+  }
+
+  /**
+   * Returns configured or default Plaud Desktop cache folder path.
+   */
+  public getPlaudCachePath(): string {
+    const custom = (this.settings.plaudDesktopCachePath || "").trim();
+    if (custom.length > 0) {
+      return custom;
+    }
+    return this.getDefaultPlaudCachePath();
+  }
+
+  /**
+   * Scans Plaud Desktop cache directory (%APPDATA%\ogg-cache or custom), copies new recordings
+   * into the vault, runs transcription (Snapdragon NPU / Whisper), and generates Kepano notes.
+   */
+  public async importFromPlaudDesktopCache(options?: {
+    force?: boolean;
+    onProgress?: (current: number, total: number, fileName: string) => void;
+  }): Promise<{ total: number; imported: number; skipped: number; errors: number }> {
+    const cacheDir = this.getPlaudCachePath();
+
+    if (!cacheDir || !existsSync(cacheDir)) {
+      const msg = `Plaud Desktop cache directory not found:\n${cacheDir || "(path not configured)"}\n\nIf Plaud Desktop is on another computer, enter its shared network path in Settings.`;
+      new Notice(msg, 7000);
+      await this.log(`⚠️ Plaud Desktop cache directory not found: ${cacheDir}`);
+      return { total: 0, imported: 0, skipped: 0, errors: 0 };
+    }
+
+    await this.log(`🔍 Scanning Plaud Desktop cache at: ${cacheDir}`);
+
+    let fileNames: string[] = [];
+    try {
+      const dirEntries = await fsPromises.readdir(cacheDir, { withFileTypes: true });
+      const validAudioExts = new Set([".ogg", ".wav", ".mp3", ".m4a", ".aac", ".webm"]);
+      fileNames = dirEntries
+        .filter((d) => d.isFile() && validAudioExts.has(path.extname(d.name).toLowerCase()))
+        .map((d) => d.name);
+    } catch (readErr: any) {
+      new Notice(`Failed to read Plaud cache folder: ${readErr.message}`, 6000);
+      await this.log(`❌ Failed to read Plaud cache folder: ${readErr.message}`);
+      return { total: 0, imported: 0, skipped: 0, errors: 1 };
+    }
+
+    if (fileNames.length === 0) {
+      new Notice(`No audio recordings found in Plaud Desktop cache (${cacheDir}).`, 5000);
+      await this.log(`  └─ No audio recordings found in cache folder.`);
+      return { total: 0, imported: 0, skipped: 0, errors: 0 };
+    }
+
+    const inboxFolder = normalizePath(this.settings.localAudioFolder || "Attachments/Inbox");
+    await this.ensureFolder(inboxFolder);
+
+    let imported = 0;
+    let skipped = 0;
+    let errors = 0;
+
+    for (let i = 0; i < fileNames.length; i++) {
+      const fileName = fileNames[i];
+      const cacheKey = `plaud_cache_${fileName}`;
+
+      // Check if already synced unless forced
+      if (!options?.force && this.settings.syncedFiles[cacheKey]) {
+        skipped++;
+        continue;
+      }
+
+      if (options?.onProgress) {
+        options.onProgress(i + 1, fileNames.length, fileName);
+      }
+
+      const fullSourcePath = path.join(cacheDir, fileName);
+      await this.log(`📥 Ingesting Plaud cache recording (${i + 1}/${fileNames.length}): ${fileName}...`);
+      new Notice(`Ingesting Plaud recording (${i + 1}/${fileNames.length}): ${fileName}...`, 4000);
+
+      try {
+        const fileBuffer = await fsPromises.readFile(fullSourcePath);
+        const targetVaultPath = normalizePath(`${inboxFolder}/${fileName}`);
+
+        // Write into vault
+        const existingVaultFile = this.app.vault.getAbstractFileByPath(targetVaultPath);
+        let vaultFile: TFile;
+        if (existingVaultFile instanceof TFile) {
+          await this.app.vault.modifyBinary(existingVaultFile, fileBuffer.buffer);
+          vaultFile = existingVaultFile;
+        } else {
+          vaultFile = await this.app.vault.createBinary(targetVaultPath, fileBuffer.buffer);
+        }
+
+        // Transcribe and generate note
+        const notePath = await this.transcribeLocalAudioFile(vaultFile);
+
+        // Mark in synced registry
+        this.settings.syncedFiles[cacheKey] = {
+          title: vaultFile.basename,
+          note_path: notePath,
+          audio_path: targetVaultPath,
+          synced_at: new Date().toISOString(),
+        };
+        await this.saveSettings();
+        imported++;
+      } catch (fileErr: any) {
+        errors++;
+        await this.log(`❌ Failed to import ${fileName}: ${fileErr.message}`);
+        new Notice(`Failed to import ${fileName}: ${fileErr.message}`, 6000);
+      }
+    }
+
+    const resultMsg = `Plaud Cache Import: ${imported} imported, ${skipped} already synced${errors > 0 ? `, ${errors} errors` : ""}.`;
+    new Notice(resultMsg, 6000);
+    await this.log(`✓ ${resultMsg}`);
+
+    return { total: fileNames.length, imported, skipped, errors };
   }
 }

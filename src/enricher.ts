@@ -760,6 +760,7 @@ export async function summarizeTranscript({
   people: string[];
   organizations: string[];
   speakerMap: Record<string, string>;
+  title?: string;
 }> {
   const fullDialogue = transcriptSegments
     .map(s => `${s.speaker || "Speaker"}: ${s.content}`)
@@ -775,6 +776,7 @@ ${fullDialogue.slice(0, 80000)}
 
 Respond strictly with ONLY a JSON object adhering to this schema:
 {
+  "title": "Concise descriptive meeting topic title (3-7 words, e.g. 'Project Alpha Architecture Review')",
   "summary": "2-3 paragraph executive summary of key discussion points, context, and outcomes.",
   "outline": "### Key Discussion Topics\\n- Topic 1\\n- Topic 2\\n\\n### Decisions Made\\n- Decision 1\\n\\n### Action Items\\n- [ ] Task 1 (Assignee)\\n- [ ] Task 2 (Assignee)",
   "people": ["Alice Smith", "Bob Jones"],
@@ -811,6 +813,7 @@ Respond strictly with ONLY a JSON object adhering to this schema:
         const orgs = Array.isArray(parsed.organizations) ? parsed.organizations : [];
         if (orgs.length > 0) await saveLearnedOrganizations(orgs);
         return {
+          title: parsed.title || "",
           summaryContent: parsed.summary || "",
           outlineText: parsed.outline || "",
           people: sanitizePeopleList(parsed.people || []),
@@ -849,6 +852,7 @@ Respond strictly with ONLY a JSON object adhering to this schema:
           const orgs = Array.isArray(parsed.organizations) ? parsed.organizations : [];
           if (orgs.length > 0) await saveLearnedOrganizations(orgs);
           return {
+            title: parsed.title || "",
             summaryContent: parsed.summary || "",
             outlineText: parsed.outline || "",
             people: sanitizePeopleList(parsed.people || []),

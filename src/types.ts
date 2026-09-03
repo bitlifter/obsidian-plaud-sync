@@ -28,6 +28,8 @@ export interface PlaudPluginSettings {
   forceCloud: boolean;
   customOrgs: string;
   autoSyncOnStartup: boolean;
+  plaudDesktopCachePath: string;
+  autoImportPlaudCache: boolean;
   lastSync: string | null;
   syncedFiles: Record<string, {
     title: string;
@@ -61,6 +63,8 @@ export const DEFAULT_SETTINGS: PlaudPluginSettings = {
   forceCloud: false,
   customOrgs: "",
   autoSyncOnStartup: false,
+  plaudDesktopCachePath: "",
+  autoImportPlaudCache: false,
   lastSync: null,
   syncedFiles: {}
 };
