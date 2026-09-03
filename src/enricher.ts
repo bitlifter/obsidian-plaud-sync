@@ -286,7 +286,8 @@ export async function resolveSpeakersGemini(
   transcriptSegments: TranscriptSegment[] = [],
   summaryContent = "",
   title = "",
-  apiKey: string
+  apiKey: string,
+  model = "gemini-3.6-flash"
 ): Promise<SpeakerResolution> {
   if (!apiKey) throw new Error("Gemini API key is not configured.");
 
@@ -343,7 +344,8 @@ Respond with ONLY a valid JSON object in this exact schema:
   "confidence": 0.95
 }`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
+  const selectedModel = model || "gemini-3.6-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${apiKey}`;
   const response = await requestUrl({
     url,
     method: "POST",
@@ -392,7 +394,8 @@ export interface AudioTranscriptionResult {
 export async function transcribeAudioGemini(
   audioBuffer: ArrayBuffer,
   apiKey: string,
-  title: string
+  title: string,
+  model = "gemini-3.6-flash"
 ): Promise<AudioTranscriptionResult> {
   if (!apiKey) throw new Error("Gemini API key is not configured.");
 
@@ -419,7 +422,8 @@ Respond strictly with a valid JSON object in this exact schema:
   ]
 }`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
+  const selectedModel = model || "gemini-3.6-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${apiKey}`;
   const response = await requestUrl({
     url,
     method: "POST",
@@ -469,6 +473,7 @@ export async function enrichMeetingData({
   summaryContent = "",
   title = "",
   geminiApiKey = "",
+  geminiModel = "gemini-3.6-flash",
   minConfidence = 0.70,
   forceCloud = false,
   customOrgs = ""
@@ -477,6 +482,7 @@ export async function enrichMeetingData({
   summaryContent?: string;
   title?: string;
   geminiApiKey?: string;
+  geminiModel?: string;
   minConfidence?: number;
   forceCloud?: boolean;
   customOrgs?: string;
@@ -488,7 +494,8 @@ export async function enrichMeetingData({
         transcriptSegments,
         summaryContent,
         title,
-        geminiApiKey
+        geminiApiKey,
+        geminiModel
       );
       return {
         ...geminiResult,

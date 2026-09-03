@@ -92,7 +92,7 @@ export class PlaudSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Gemini API Key")
-      .setDesc("Optional: Google AI Studio key for Gemini 3.6 Flash fallback when offline speaker confidence is low.")
+      .setDesc("Optional: Google AI Studio key for Gemini speaker disambiguation and entity extraction.")
       .addText(text => {
         text.inputEl.type = "password";
         text
@@ -100,6 +100,22 @@ export class PlaudSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.geminiApiKey)
           .onChange(async val => {
             this.plugin.settings.geminiApiKey = val.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Gemini Model")
+      .setDesc("Model used for speaker diarization, attendee detection, and transcription fallback.")
+      .addDropdown(drop => {
+        drop
+          .addOption("gemini-3.6-flash", "Gemini 3.6 Flash (Recommended - fast, high precision, ~$0.0002/note)")
+          .addOption("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite (Ultra low cost, ~$0.00007/note)")
+          .addOption("gemini-2.5-flash", "Gemini 2.5 Flash (Legacy stable)")
+          .addOption("gemini-3.5-transcribe", "Gemini 3.5 Transcribe (Audio transcription specialized)")
+          .setValue(this.plugin.settings.geminiModel || "gemini-3.6-flash")
+          .onChange(async val => {
+            this.plugin.settings.geminiModel = val;
             await this.plugin.saveSettings();
           });
       });

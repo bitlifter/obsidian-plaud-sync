@@ -3,6 +3,7 @@ export interface PlaudPluginSettings {
   targetAttachmentsFolder: string;
   downloadAudio: boolean;
   geminiApiKey: string;
+  geminiModel: string;
   minConfidence: number;
   forceCloud: boolean;
   customOrgs: string;
@@ -21,6 +22,7 @@ export const DEFAULT_SETTINGS: PlaudPluginSettings = {
   targetAttachmentsFolder: "Attachments",
   downloadAudio: true,
   geminiApiKey: "",
+  geminiModel: "gemini-3.6-flash",
   minConfidence: 0.70,
   forceCloud: false,
   customOrgs: "",

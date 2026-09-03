@@ -240,8 +240,9 @@ export class PlaudSyncEngine {
 
           if (transcriptSegments.length === 0 && !summaryContent && audioBuffer && this.settings.geminiApiKey) {
             try {
-              await this.log(`  └─ 🎙️ Untranscribed audio detected. Transcribing with Gemini 3.6 Flash...`);
-              const geminiResult = await transcribeAudioGemini(audioBuffer, this.settings.geminiApiKey, rawTitle);
+              const model = this.settings.geminiModel || "gemini-3.6-flash";
+              await this.log(`  └─ 🎙️ Untranscribed audio detected. Transcribing with ${model}...`);
+              const geminiResult = await transcribeAudioGemini(audioBuffer, this.settings.geminiApiKey, rawTitle, model);
               if (geminiResult.transcriptSegments.length > 0 || geminiResult.summaryContent) {
                 transcriptSegments = geminiResult.transcriptSegments;
                 summaryContent = geminiResult.summaryContent;
@@ -263,6 +264,7 @@ export class PlaudSyncEngine {
               summaryContent,
               title: rawTitle,
               geminiApiKey: this.settings.geminiApiKey,
+              geminiModel: this.settings.geminiModel,
               minConfidence: this.settings.minConfidence,
               forceCloud: this.settings.forceCloud,
               customOrgs: this.settings.customOrgs
