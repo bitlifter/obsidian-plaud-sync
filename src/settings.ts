@@ -162,8 +162,13 @@ export class PlaudSettingTab extends PluginSettingTab {
       ? new Date(this.plugin.settings.lastSync).toLocaleString()
       : "Never";
 
+    const onProgress = (cur: number, tot: number, title: string) => {
+      const shortTitle = title.length > 22 ? title.slice(0, 22) + "..." : title;
+      this.plugin.updateStatusBar(`[${cur}/${tot}] ${shortTitle}`);
+    };
+
     new Setting(containerEl)
-      .setName("Last Synchronized")
+      .setName("Sync Operations")
       .setDesc(`Last successful sync: ${lastSyncStr}`)
       .addButton(btn =>
         btn
@@ -172,7 +177,7 @@ export class PlaudSettingTab extends PluginSettingTab {
           .onClick(async () => {
             btn.setDisabled(true);
             try {
-              await this.plugin.syncEngine.syncRecordings();
+              await this.plugin.syncEngine.syncRecordings({ onProgress });
             } finally {
               btn.setDisabled(false);
               await this.display();
@@ -186,11 +191,18 @@ export class PlaudSettingTab extends PluginSettingTab {
           .onClick(async () => {
             btn.setDisabled(true);
             try {
-              await this.plugin.syncEngine.syncRecordings({ force: true });
+              await this.plugin.syncEngine.syncRecordings({ force: true, onProgress });
             } finally {
               btn.setDisabled(false);
               await this.display();
             }
+          })
+      )
+      .addButton(btn =>
+        btn
+          .setButtonText("View Sync Log")
+          .onClick(() => {
+            (this.app as any).commands?.executeCommandById("plaud-to-obsidian:plaud-view-log");
           })
       );
   }

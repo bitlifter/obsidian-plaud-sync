@@ -1,7 +1,45 @@
-import { Plugin } from "obsidian";
+import { App, Modal, Plugin } from "obsidian";
 import { PlaudPluginSettings, DEFAULT_SETTINGS } from "./types";
 import { PlaudSyncEngine } from "./sync-engine";
 import { PlaudSettingTab } from "./settings";
+
+class SyncLogModal extends Modal {
+  private logContent: string;
+
+  constructor(app: App, logContent: string) {
+    super(app);
+    this.logContent = logContent;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "🎙️ Plaud Sync Log" });
+
+    const pre = contentEl.createEl("pre", {
+      text: this.logContent || "No logs recorded yet.",
+      cls: "plaud-sync-log-viewer"
+    });
+    pre.style.maxHeight = "450px";
+    pre.style.overflowY = "auto";
+    pre.style.fontSize = "12px";
+    pre.style.lineHeight = "1.5";
+    pre.style.backgroundColor = "var(--background-secondary)";
+    pre.style.padding = "12px";
+    pre.style.borderRadius = "6px";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.style.fontFamily = "var(--font-monospace)";
+
+    setTimeout(() => {
+      pre.scrollTop = pre.scrollHeight;
+    }, 50);
+  }
+
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+}
 
 export default class PlaudPlugin extends Plugin {
   public settings: PlaudPluginSettings = DEFAULT_SETTINGS;
@@ -17,11 +55,16 @@ export default class PlaudPlugin extends Plugin {
       () => this.saveSettings()
     );
 
+    const onProgress = (cur: number, tot: number, title: string) => {
+      const shortTitle = title.length > 22 ? title.slice(0, 22) + "..." : title;
+      this.updateStatusBar(`[${cur}/${tot}] ${shortTitle}`);
+    };
+
     // 1. Ribbon Icon (Left sidebar)
     this.addRibbonIcon("mic", "Plaud to Obsidian: Sync Recordings", async () => {
       this.updateStatusBar("Syncing...");
       try {
-        await this.syncEngine.syncRecordings();
+        await this.syncEngine.syncRecordings({ onProgress });
       } finally {
         this.updateStatusBar();
       }
@@ -34,7 +77,7 @@ export default class PlaudPlugin extends Plugin {
       callback: async () => {
         this.updateStatusBar("Syncing...");
         try {
-          await this.syncEngine.syncRecordings();
+          await this.syncEngine.syncRecordings({ onProgress });
         } finally {
           this.updateStatusBar();
         }
@@ -47,10 +90,19 @@ export default class PlaudPlugin extends Plugin {
       callback: async () => {
         this.updateStatusBar("Syncing...");
         try {
-          await this.syncEngine.syncRecordings({ force: true });
+          await this.syncEngine.syncRecordings({ force: true, onProgress });
         } finally {
           this.updateStatusBar();
         }
+      }
+    });
+
+    this.addCommand({
+      id: "plaud-view-log",
+      name: "View sync log",
+      callback: async () => {
+        const logs = await this.syncEngine.getRecentLogs();
+        new SyncLogModal(this.app, logs).open();
       }
     });
 

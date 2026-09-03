@@ -37,6 +37,32 @@ export class PlaudSyncEngine {
     return this.isSyncing;
   }
 
+  public async log(msg: string): Promise<void> {
+    const timestamp = new Date().toLocaleTimeString();
+    const line = `[${timestamp}] ${msg}`;
+    console.log(`%c[Plaud Sync]%c ${line}`, "color: #9d7cd8; font-weight: bold;", "color: inherit;");
+    try {
+      const logPath = normalizePath(".obsidian/plaud-sync.log");
+      const exists = await this.app.vault.adapter.exists(logPath);
+      if (exists) {
+        await this.app.vault.adapter.append(logPath, line + "\n");
+      } else {
+        await this.app.vault.adapter.write(logPath, line + "\n");
+      }
+    } catch {}
+  }
+
+  public async getRecentLogs(): Promise<string> {
+    try {
+      const logPath = normalizePath(".obsidian/plaud-sync.log");
+      const exists = await this.app.vault.adapter.exists(logPath);
+      if (exists) {
+        return await this.app.vault.adapter.read(logPath);
+      }
+    } catch {}
+    return "No sync logs recorded yet.";
+  }
+
   private async ensureFolder(folderPath: string): Promise<void> {
     const normalized = normalizePath(folderPath);
     if (!normalized || normalized === "/" || normalized === ".") return;
@@ -75,8 +101,10 @@ export class PlaudSyncEngine {
         await this.ensureFolder(this.settings.targetAttachmentsFolder);
       }
 
+      await this.log(`=== Plaud Sync Started (Force: ${force}) ===`);
       const allFiles = await this.client.listFiles(100);
       new Notice(`Found ${allFiles.length} recordings in Plaud.`);
+      await this.log(`Found ${allFiles.length} total recordings in Plaud account.`);
 
       const pendingFiles = force
         ? allFiles
@@ -90,11 +118,13 @@ export class PlaudSyncEngine {
 
       if (pendingFiles.length === 0) {
         new Notice("Vault is already up to date! No new recordings to sync.");
+        await this.log("Vault is already up to date. No new recordings to sync.");
         this.isSyncing = false;
         return { total: allFiles.length, synced: 0, skipped: allFiles.length, errors: 0 };
       }
 
       new Notice(`Syncing ${pendingFiles.length} recordings...`);
+      await this.log(`Queued ${pendingFiles.length} recordings to sync.`);
 
       let syncedCount = 0;
       let errorCount = 0;
@@ -114,6 +144,8 @@ export class PlaudSyncEngine {
           const dateInfo = parsePlaudDate(item.start_time || item.created_at || detail.start_time || detail.start_at);
           const durationSec = item.duration || detail.duration || 0;
           const durationStr = formatDuration(durationSec);
+
+          await this.log(`[${i + 1}/${pendingFiles.length}] Syncing: "${rawTitle}" (${durationStr})`);
 
           const autoSum = extractAutoSumNotes(detail);
           const noteTitle = formatNoteTitle(rawTitle, dateInfo.date, dateInfo.time);
@@ -208,6 +240,7 @@ export class PlaudSyncEngine {
 
           if (transcriptSegments.length === 0 && !summaryContent && audioBuffer && this.settings.geminiApiKey) {
             try {
+              await this.log(`  └─ 🎙️ Untranscribed audio detected. Transcribing with Gemini 3.6 Flash...`);
               const geminiResult = await transcribeAudioGemini(audioBuffer, this.settings.geminiApiKey, rawTitle);
               if (geminiResult.transcriptSegments.length > 0 || geminiResult.summaryContent) {
                 transcriptSegments = geminiResult.transcriptSegments;
@@ -215,8 +248,10 @@ export class PlaudSyncEngine {
                 if (geminiResult.outlineText) outlineText = geminiResult.outlineText;
                 enrichedPeople = geminiResult.people;
                 enrichedOrganizations = geminiResult.organizations;
+                await this.log(`  └─ ✓ Gemini transcription completed (${transcriptSegments.length} segments)`);
               }
             } catch (transErr: any) {
+              await this.log(`  └─ ⚠️ Gemini audio transcription failed: ${transErr.message}`);
               console.warn(`Gemini audio transcription fallback failed for ${rawTitle}: ${transErr.message}`);
             }
           }
@@ -270,12 +305,16 @@ export class PlaudSyncEngine {
           };
 
           syncedCount++;
+          await this.log(`  └─ ✓ Note written: ${noteVaultPath}`);
+          if (audioFilename) await this.log(`  └─ ✓ Audio: ${audioFilename}`);
+          if (enrichedPeople.length > 0) await this.log(`  └─ Attendees: ${enrichedPeople.join(", ")}`);
 
           // Periodically save state
           if (syncedCount % 5 === 0) {
             await this.saveSettings();
           }
         } catch (itemErr: any) {
+          await this.log(`  └─ ❌ Error processing "${rawTitle}": ${itemErr.message}`);
           console.error(`Error processing recording ${rawTitle}:`, itemErr);
           errorCount++;
         }
@@ -284,6 +323,7 @@ export class PlaudSyncEngine {
       this.settings.lastSync = new Date().toISOString();
       await this.saveSettings();
 
+      await this.log(`=== Plaud Sync Completed: ${syncedCount} synced, ${errorCount} errors ===`);
       const summaryMsg = `Plaud Sync complete! ${syncedCount} synced, ${errorCount} errors.`;
       new Notice(summaryMsg, 5000);
 
