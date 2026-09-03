@@ -123,12 +123,12 @@ export class PlaudSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Transcription Engine")
-      .setDesc("Choose whether to use Plaud Cloud, local whisper.cpp (CPU), or Snapdragon NPU (Qualcomm QNN).")
+      .setDesc("Choose whether to use Plaud Cloud, local whisper.cpp (CPU), or Snapdragon ARM64 / Hexagon NPU (ONNX Runtime).")
       .addDropdown(drop => {
         drop
           .addOption("plaud_cloud", "Plaud Cloud (Default)")
           .addOption("whisper_cpp", "Local Whisper.cpp (CPU / Standard)")
-          .addOption("qnn_npu", "Snapdragon NPU (Qualcomm QNN - Hardware Accelerated)")
+          .addOption("qnn_npu", "Snapdragon ARM64 / Hexagon NPU (ONNX Runtime - Hardware Optimized)")
           .setValue(this.plugin.settings.transcriptionEngine || "plaud_cloud")
           .onChange(async val => {
             this.plugin.settings.transcriptionEngine = val as any;

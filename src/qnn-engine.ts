@@ -401,58 +401,17 @@ export interface QnnTranscriptionOptions {
   onProgressNotice?: (msg: string) => void;
 }
 
-/**
- * Runs hardware-accelerated transcription using the Qualcomm QNN / ONNX execution provider.
- */
-export async function runQnnTranscription(
-  options: QnnTranscriptionOptions
-): Promise<TranscriptSegment[]> {
-  const { binaryPath, modelDir, audioWavPath } = options;
+interface ProcessResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+}
 
-  if (!existsSync(binaryPath)) {
-    throw new Error(`QNN Runner executable not found at: ${binaryPath}`);
-  }
-  if (!existsSync(audioWavPath)) {
-    throw new Error(`Audio file not found at: ${audioWavPath}`);
-  }
-
-  // Find encoder, decoder, tokens in modelDir
-  const files = await fs.readdir(modelDir);
-  const encoderFile = files.find((f) => f.includes("encoder") && f.endsWith(".onnx"));
-  const decoderFile = files.find((f) => f.includes("decoder") && f.endsWith(".onnx"));
-  const tokensFile = files.find((f) => f.includes("tokens") && f.endsWith(".txt"));
-
-  if (!encoderFile || !decoderFile || !tokensFile) {
-    throw new Error(
-      `Incomplete ONNX model in ${modelDir}. Missing encoder, decoder, or tokens file.`
-    );
-  }
-
-  const encoderPath = path.join(modelDir, encoderFile);
-  const decoderPath = path.join(modelDir, decoderFile);
-  const tokensPath = path.join(modelDir, tokensFile);
-
-  const hw = detectSnapdragonHardware();
-  // Provider: QNN on Snapdragon ARM64, DirectML or CPU on x64
-  const provider = hw.isSnapdragon ? "qnn" : "directml";
-
-  const args: string[] = [
-    `--whisper-encoder=${encoderPath}`,
-    `--whisper-decoder=${decoderPath}`,
-    `--tokens=${tokensPath}`,
-    `--whisper-language=${options.language || "en"}`,
-    `--whisper-task=transcribe`,
-    `--provider=${provider}`,
-    `--num-threads=4`,
-  ];
-
-  if (options.customBackendPath && existsSync(options.customBackendPath)) {
-    args.push(`--whisper.qnn-backend-lib=${options.customBackendPath}`);
-  }
-
-  args.push(audioWavPath);
-
-  return new Promise<TranscriptSegment[]>((resolve, reject) => {
+function runSherpaProcess(
+  binaryPath: string,
+  args: string[]
+): Promise<ProcessResult> {
+  return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
 
@@ -470,95 +429,226 @@ export async function runQnnTranscription(
     });
 
     proc.on("error", (err) => {
-      reject(new Error(`Failed to start QNN runner (${binaryPath}): ${err.message}`));
+      resolve({ stdout, stderr: err.message, code: -1 });
     });
 
     proc.on("close", (code) => {
-      if (code !== 0) {
-        reject(
-          new Error(
-            `QNN execution failed (code ${code}): ${stderr.trim() || stdout.trim()}`
-          )
-        );
-        return;
-      }
+      resolve({ stdout, stderr, code: code ?? 0 });
+    });
+  });
+}
 
-      const text = stdout.trim();
-      if (!text) {
-        resolve([]);
-        return;
-      }
+/**
+ * Runs hardware-accelerated transcription using the Qualcomm QNN / ONNX execution provider.
+ */
+export async function runQnnTranscription(
+  options: QnnTranscriptionOptions
+): Promise<TranscriptSegment[]> {
+  const { binaryPath, modelDir, audioWavPath } = options;
 
-      // Try parsing JSON output if sherpa-onnx output formatted JSON
-      try {
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed)) {
-          resolve(
-            parsed.map((p, idx) => ({
-              speaker: p.speaker || `Speaker ${idx + 1}`,
-              startTime: p.start || p.startTime || 0,
-              endTime: p.end || p.endTime || 0,
-              content: p.text || p.content || "",
-            }))
-          );
-          return;
-        }
-      } catch {}
+  if (!existsSync(binaryPath)) {
+    throw new Error(`QNN Runner executable not found at: ${binaryPath}`);
+  }
+  if (!existsSync(audioWavPath)) {
+    throw new Error(`Audio file not found at: ${audioWavPath}`);
+  }
 
-      // Parse line-by-line timestamp format:
-      // [00:00:01.000 --> 00:00:04.000] Hello world
-      const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-      const segments: TranscriptSegment[] = [];
+  // Find encoder, decoder, tokens in modelDir
+  const files = await fs.readdir(modelDir);
+  const encoderFile =
+    files.find((f) => f.includes("encoder") && f.endsWith(".int8.onnx")) ||
+    files.find((f) => f.includes("encoder") && f.endsWith(".onnx"));
+  const decoderFile =
+    files.find((f) => f.includes("decoder") && f.endsWith(".int8.onnx")) ||
+    files.find((f) => f.includes("decoder") && f.endsWith(".onnx"));
+  const tokensFile = files.find((f) => f.includes("tokens") && f.endsWith(".txt"));
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        const tsMatch = line.match(
-          /\[?(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*(?:-->|--)\s*(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\]?\s*(.*)/
-        );
-        if (tsMatch) {
-          const startMs =
-            parseInt(tsMatch[1], 10) * 3600000 +
-            parseInt(tsMatch[2], 10) * 60000 +
-            parseInt(tsMatch[3], 10) * 1000 +
-            parseInt(tsMatch[4], 10);
-          const endMs =
-            parseInt(tsMatch[5], 10) * 3600000 +
-            parseInt(tsMatch[6], 10) * 60000 +
-            parseInt(tsMatch[7], 10) * 1000 +
-            parseInt(tsMatch[8], 10);
-          const content = tsMatch[9].trim();
+  if (!encoderFile || !decoderFile || !tokensFile) {
+    throw new Error(
+      `Incomplete ONNX model in ${modelDir}. Missing encoder, decoder, or tokens file.`
+    );
+  }
+
+  const encoderPath = path.join(modelDir, encoderFile);
+  const decoderPath = path.join(modelDir, decoderFile);
+  const tokensPath = path.join(modelDir, tokensFile);
+
+  const numThreads = Math.max(1, Math.min(8, os.cpus().length > 4 ? 6 : 4));
+
+  const baseArgs: string[] = [
+    `--whisper-encoder=${encoderPath}`,
+    `--whisper-decoder=${decoderPath}`,
+    `--tokens=${tokensPath}`,
+    `--whisper-language=${options.language || "en"}`,
+    `--whisper-task=transcribe`,
+    `--whisper-enable-segment-timestamps=true`,
+    `--num-threads=${numThreads}`,
+  ];
+
+  const hasCustomQnn = Boolean(options.customBackendPath && existsSync(options.customBackendPath));
+  // Provider strategy:
+  // Prebuilt sherpa-onnx releases use ONNX Runtime's CPU execution provider by default,
+  // which leverages native 64-bit ARM Neon vector SIMD and KleidiAI kernels on Snapdragon Windows ARM64.
+  // The 'qnn' provider option in sherpa-onnx requires custom compilation with the proprietary Qualcomm QNN SDK.
+  // If the user provided a custom Qualcomm backend path, we attempt 'qnn' first.
+  // Otherwise, or if 'qnn' exits with failure, we run with 'cpu'.
+  let provider = hasCustomQnn ? "qnn" : "cpu";
+
+  let runArgs = [...baseArgs, `--provider=${provider}`];
+  if (provider === "qnn" && options.customBackendPath) {
+    runArgs.push(`--whisper.qnn-backend-lib=${options.customBackendPath}`);
+  }
+  runArgs.push(audioWavPath);
+
+  let result = await runSherpaProcess(binaryPath, runArgs);
+
+  // If QNN failed (e.g. exit code -1 / 4294967295 due to missing compiled QNN EP),
+  // fall back immediately to native ARM64 CPU/Neon provider
+  if (result.code !== 0 && provider === "qnn") {
+    console.warn(
+      `[Plaud Sync] QNN provider execution failed (code ${result.code}), falling back to native CPU/Neon execution provider.`
+    );
+    provider = "cpu";
+    runArgs = [...baseArgs, `--provider=cpu`, audioWavPath];
+    result = await runSherpaProcess(binaryPath, runArgs);
+  }
+
+  if (result.code !== 0) {
+    // Extract meaningful error lines rather than dumping the full config struct
+    const errLines = result.stderr
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(
+        (l) =>
+          l &&
+          (l.toLowerCase().includes("error") ||
+            l.toLowerCase().includes("failed") ||
+            l.toLowerCase().includes("please rebuild") ||
+            l.toLowerCase().includes("not exist") ||
+            l.toLowerCase().includes("invalid"))
+      );
+    const detail =
+      errLines.length > 0
+        ? errLines.join("; ")
+        : (result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`);
+
+    throw new Error(`Speech engine failed (code ${result.code}): ${detail}`);
+  }
+
+  const text = result.stdout.trim();
+  if (!text) {
+    return [];
+  }
+
+  // 1. Try parsing JSON output from sherpa-onnx (OfflineRecognitionResult::AsJsonString)
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*"text"[\s\S]*\}/);
+    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(text);
+
+    if (parsed && typeof parsed === "object") {
+      // Check if Whisper segment timestamps are available
+      if (
+        Array.isArray(parsed.segment_timestamps) &&
+        Array.isArray(parsed.segment_texts) &&
+        parsed.segment_timestamps.length > 0
+      ) {
+        const segments: TranscriptSegment[] = [];
+        for (let i = 0; i < parsed.segment_timestamps.length; i++) {
+          const startSec = Number(parsed.segment_timestamps[i]) || 0;
+          const durSec = Number(parsed.segment_durations?.[i]) || 0;
+          const content = String(parsed.segment_texts[i] || "").trim();
           if (content) {
             segments.push({
               speaker: "Speaker 1",
-              startTime: startMs,
-              endTime: endMs,
+              startTime: Math.round(startSec * 1000),
+              endTime: Math.round((startSec + durSec) * 1000),
               content,
             });
           }
-        } else if (
-          line.length > 0 &&
-          !line.startsWith("{") &&
-          !line.startsWith("Loading")
-        ) {
-          segments.push({
-            speaker: "Speaker 1",
-            startTime: i * 3000,
-            endTime: (i + 1) * 3000,
-            content: line,
-          });
+        }
+        if (segments.length > 0) {
+          return segments;
         }
       }
 
-      if (segments.length === 0 && text.length > 0) {
-        segments.push({
-          speaker: "Speaker 1",
-          startTime: 0,
-          endTime: 0,
-          content: text,
-        });
+      // Check if array format (custom runner wrapper)
+      if (Array.isArray(parsed)) {
+        return parsed.map((p, idx) => ({
+          speaker: p.speaker || `Speaker ${idx + 1}`,
+          startTime: p.start || p.startTime || 0,
+          endTime: p.end || p.endTime || 0,
+          content: p.text || p.content || "",
+        }));
       }
 
-      resolve(segments);
+      // If text string is present in JSON object
+      if (typeof parsed.text === "string" && parsed.text.trim()) {
+        return [
+          {
+            speaker: "Speaker 1",
+            startTime: 0,
+            endTime: 0,
+            content: parsed.text.trim(),
+          },
+        ];
+      }
+    }
+  } catch {}
+
+  // 2. Parse line-by-line timestamp format:
+  // [00:00:01.000 --> 00:00:04.000] Hello world
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const segments: TranscriptSegment[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const tsMatch = line.match(
+      /\[?(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*(?:-->|--)\s*(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\]?\s*(.*)/
+    );
+    if (tsMatch) {
+      const startMs =
+        parseInt(tsMatch[1], 10) * 3600000 +
+        parseInt(tsMatch[2], 10) * 60000 +
+        parseInt(tsMatch[3], 10) * 1000 +
+        parseInt(tsMatch[4], 10);
+      const endMs =
+        parseInt(tsMatch[5], 10) * 3600000 +
+        parseInt(tsMatch[6], 10) * 60000 +
+        parseInt(tsMatch[7], 10) * 1000 +
+        parseInt(tsMatch[8], 10);
+      const content = tsMatch[9].trim();
+      if (content) {
+        segments.push({
+          speaker: "Speaker 1",
+          startTime: startMs,
+          endTime: endMs,
+          content,
+        });
+      }
+    } else if (
+      line.length > 0 &&
+      !line.startsWith("{") &&
+      !line.startsWith("Loading") &&
+      !line.startsWith("Done!") &&
+      !line.startsWith("Started")
+    ) {
+      segments.push({
+        speaker: "Speaker 1",
+        startTime: i * 3000,
+        endTime: (i + 1) * 3000,
+        content: line,
+      });
+    }
+  }
+
+  if (segments.length === 0 && text.length > 0) {
+    segments.push({
+      speaker: "Speaker 1",
+      startTime: 0,
+      endTime: 0,
+      content: text,
     });
-  });
+  }
+
+  return segments;
 }
