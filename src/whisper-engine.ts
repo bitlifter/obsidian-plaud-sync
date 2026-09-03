@@ -50,9 +50,15 @@ export const WHISPER_RELEASE_ZIP =
 import * as https from "https";
 import * as http from "http";
 
+const downloadHttpsAgent = new https.Agent({
+  rejectUnauthorized: false,
+  keepAlive: true,
+});
+
 /**
  * Downloads a file from URL to destPath using Node's streaming https/http client.
  * Completely immune to Chromium/Electron CORS restrictions on GitHub release assets,
+ * bypasses corporate/VPN SSL inspection certificate chain issues,
  * recursively follows 301/302 redirects, and provides real-time byte progress.
  */
 export async function downloadFileWithProgress(
@@ -69,10 +75,12 @@ export async function downloadFileWithProgress(
         return reject(new Error(`Too many redirects while downloading from ${url}`));
       }
 
-      const client = currentUrl.startsWith("https:") ? https : http;
+      const isHttps = currentUrl.startsWith("https:");
+      const client = isHttps ? https : http;
       const req = client.get(
         currentUrl,
         {
+          agent: isHttps ? downloadHttpsAgent : undefined,
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Obsidian-Plaud-Sync/1.2.0",
             Accept: "*/*",
