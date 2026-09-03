@@ -78,11 +78,17 @@ export function parsePlaudDate(dateStr?: string | number): { date: string; time:
   };
 }
 
-export function formatDuration(seconds: number): string {
-  if (!seconds || seconds <= 0) return "0:00";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
+export function formatDuration(val: number): string {
+  if (!val || val <= 0) return "0:00";
+  // Plaud API returns duration in milliseconds (e.g. 2434000 ms = 40m 34s)
+  const totalSec = val > 10000 ? Math.floor(val / 1000) : Math.floor(val);
+  const hours = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  if (hours > 0) {
+    return `${hours}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
 export function formatTimestamp(ms: number): string {
