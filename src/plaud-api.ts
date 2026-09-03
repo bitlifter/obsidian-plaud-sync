@@ -4,6 +4,12 @@ import * as path from "path";
 import * as fsPromises from "fs/promises";
 import { PlaudTokenSet, PlaudFileItem } from "./types";
 
+export interface PlaudAuthStatus {
+  state: "connected" | "expired" | "disconnected";
+  label: string;
+  detail: string;
+}
+
 export class PlaudApiClient {
   private tokenPath: string;
   private tokenSet: PlaudTokenSet | null = null;
@@ -22,6 +28,60 @@ export class PlaudApiClient {
     }
   }
 
+  public async checkAuthStatus(): Promise<PlaudAuthStatus> {
+    try {
+      await fsPromises.access(this.tokenPath);
+    } catch {
+      return {
+        state: "disconnected",
+        label: "Not Connected",
+        detail: "No credentials found. Click 'Connect Account' to authenticate."
+      };
+    }
+
+    try {
+      // Validate or refresh token
+      const token = await this.getValidAccessToken();
+
+      // Test active connectivity with lightweight ping
+      const res = await requestUrl({
+        url: `${this.baseUrl}/open/third-party/files/?page=1&page_size=1`,
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        throw: false
+      });
+
+      if (res.status === 200) {
+        return {
+          state: "connected",
+          label: "Connected",
+          detail: `Connected via ${this.tokenPath}`
+        };
+      } else if (res.status === 401) {
+        return {
+          state: "expired",
+          label: "Session Expired",
+          detail: "Plaud session has expired. Click 'Re-authenticate' to log in."
+        };
+      } else {
+        return {
+          state: "connected",
+          label: "Connected (Offline)",
+          detail: `Cached session valid, API returned HTTP ${res.status}.`
+        };
+      }
+    } catch (err: any) {
+      return {
+        state: "expired",
+        label: "Session Expired",
+        detail: `Authentication error: ${err.message || err}`
+      };
+    }
+  }
+
   public async loadTokens(): Promise<PlaudTokenSet> {
     try {
       const data = await fsPromises.readFile(this.tokenPath, "utf-8");
@@ -29,7 +89,7 @@ export class PlaudApiClient {
       return this.tokenSet!;
     } catch (err: any) {
       throw new Error(
-        `No Plaud credentials found at ${this.tokenPath}. Please authenticate via 'plaud-export login' or link your account in settings.`
+        `No Plaud credentials found at ${this.tokenPath}. Please authenticate via 'Connect Account' in settings.`
       );
     }
   }
@@ -50,8 +110,15 @@ export class PlaudApiClient {
       throw new Error("No access_token found in Plaud token set.");
     }
 
-    const nowSec = Math.floor(Date.now() / 1000);
-    if (this.tokenSet.expires_at && nowSec >= this.tokenSet.expires_at - 60) {
+    const nowMs = Date.now();
+    let expiresMs: number | undefined;
+    if (this.tokenSet.expires_at) {
+      expiresMs = this.tokenSet.expires_at > 1e11
+        ? this.tokenSet.expires_at
+        : this.tokenSet.expires_at * 1000;
+    }
+
+    if (expiresMs && nowMs >= expiresMs - 60000) {
       if (this.tokenSet.refresh_token) {
         await this.refreshAccessToken();
       }
@@ -70,11 +137,12 @@ export class PlaudApiClient {
       url,
       method: "POST",
       headers: {
-        "Content-Type": "application/json"
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json"
       },
-      body: JSON.stringify({
+      body: new URLSearchParams({
         refresh_token: this.tokenSet.refresh_token
-      }),
+      }).toString(),
       throw: false
     });
 
@@ -83,17 +151,14 @@ export class PlaudApiClient {
     }
 
     const data = res.json;
-    if (data.code !== 0 && data.code !== 200 && data.status !== "success" && !data.data?.access_token) {
-      throw new Error(`Refresh token rejected: ${JSON.stringify(data)}`);
-    }
-
     const tokenPayload = data.data || data;
     await this.saveTokens({
       access_token: tokenPayload.access_token,
       refresh_token: tokenPayload.refresh_token || this.tokenSet.refresh_token,
+      token_type: tokenPayload.token_type || "bearer",
       expires_at: tokenPayload.expires_in
-        ? Math.floor(Date.now() / 1000) + tokenPayload.expires_in
-        : undefined
+        ? Date.now() + tokenPayload.expires_in * 1000
+        : (tokenPayload.expires_at || undefined)
     });
 
     return this.tokenSet!.access_token;

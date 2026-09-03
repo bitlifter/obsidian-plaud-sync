@@ -19,6 +19,11 @@
   color: var(--text-error, #e74c3c);
 }
 
+.plaud-auth-expired {
+  background-color: rgba(243, 156, 18, 0.15);
+  color: var(--text-warning, #f39c12);
+}
+
 .plaud-sync-progress {
   font-size: 0.9em;
   color: var(--text-muted);

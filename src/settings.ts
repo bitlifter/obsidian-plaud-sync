@@ -16,6 +16,7 @@ import {
   downloadQnnModel,
   QNN_MODELS
 } from "./qnn-engine";
+import { startPlaudOAuthLogin } from "./oauth";
 
 export class PlaudSettingTab extends PluginSettingTab {
   private plugin: PlaudPlugin;
@@ -34,32 +35,44 @@ export class PlaudSettingTab extends PluginSettingTab {
     // 1. Account & Connection Status
     containerEl.createEl("h3", { text: "Authentication" });
 
-    const hasTokens = await this.plugin.syncEngine.getApiClient().hasLocalTokens();
+    const authStatus = await this.plugin.syncEngine.getApiClient().checkAuthStatus();
+    const isConnected = authStatus.state === "connected";
 
     const authSetting = new Setting(containerEl)
       .setName("Plaud Account Status")
-      .setDesc(
-        hasTokens
-          ? "Connected via ~/.plaud/tokens-mcp.json"
-          : "Not connected. Link your Plaud account using OAuth."
-      );
+      .setDesc(authStatus.detail);
 
-    const badge = authSetting.controlEl.createEl("span", {
-      text: hasTokens ? "Connected" : "Disconnected",
-      cls: `plaud-auth-status ${hasTokens ? "plaud-auth-connected" : "plaud-auth-disconnected"}`
+    const badgeCls =
+      authStatus.state === "connected"
+        ? "plaud-auth-connected"
+        : authStatus.state === "expired"
+        ? "plaud-auth-expired"
+        : "plaud-auth-disconnected";
+
+    authSetting.controlEl.createEl("span", {
+      text: authStatus.label,
+      cls: `plaud-auth-status ${badgeCls}`
     });
 
     authSetting.addButton(btn => {
-      btn.setButtonText(hasTokens ? "Re-authenticate" : "Connect Account");
-      if (!hasTokens) {
+      btn.setButtonText(isConnected ? "Re-authenticate" : "Connect Account");
+      if (!isConnected) {
         btn.setCta();
       }
       btn.onClick(async () => {
-          new Notice(
-            "To connect your Plaud account, run 'npx -y @plaud-ai/mcp install' in your terminal or use 'plaud-export login'.",
-            8000
-          );
-        });
+        btn.setDisabled(true);
+        btn.setButtonText("Authorizing in browser...");
+        new Notice("Opening browser for Plaud login... Please authorize access.", 10000);
+        try {
+          await startPlaudOAuthLogin();
+          new Notice("✓ Successfully connected to Plaud!", 6000);
+          this.display();
+        } catch (err: any) {
+          new Notice(`Plaud login failed: ${err.message}`, 8000);
+          btn.setDisabled(false);
+          btn.setButtonText(isConnected ? "Re-authenticate" : "Connect Account");
+        }
+      });
     });
 
     // 2. Folder Configuration
