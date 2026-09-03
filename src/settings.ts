@@ -208,11 +208,20 @@ export class PlaudSettingTab extends PluginSettingTab {
           .onClick(async () => {
             btn.setButtonText("Downloading...").setDisabled(true);
             try {
-              await downloadAndInstallQnnRunner(pluginDir, (msg) => {
-                new Notice(msg, 3000);
+              let lastNoticeTime = 0;
+              await downloadAndInstallQnnRunner(pluginDir, (msg, pct) => {
+                if (pct !== undefined && pct > 0) {
+                  btn.setButtonText(`Downloading (${pct}%)...`);
+                }
+                const now = Date.now();
+                if (now - lastNoticeTime > 3000 || pct === 100 || !pct) {
+                  lastNoticeTime = now;
+                  new Notice(msg, 2500);
+                }
               });
               new Notice("✓ QNN speech runner installed successfully!");
             } catch (e: any) {
+              console.error("QNN runner install error:", e);
               new Notice(`✗ Failed to install QNN runner: ${e.message}`, 8000);
             } finally {
               await this.display();
@@ -229,13 +238,17 @@ export class PlaudSettingTab extends PluginSettingTab {
               const mKey = this.plugin.settings.qnnModel || "base.en";
               const size = QNN_MODELS[mKey]?.sizeMb || 199;
               new Notice(`Downloading QNN model ${mKey} (~${size} MB)...`, 5000);
+              let lastNoticePct = -1;
               await downloadQnnModel(mKey, pluginDir, (pct) => {
-                if (pct % 20 === 0 || pct === 100) {
+                btn.setButtonText(`Downloading (${pct}%)...`);
+                if (pct >= lastNoticePct + 15 || pct === 100) {
+                  lastNoticePct = pct;
                   new Notice(`Downloading QNN ${mKey}: ${pct}%`, 2000);
                 }
               });
               new Notice(`✓ QNN model ${mKey} downloaded and extracted!`);
             } catch (e: any) {
+              console.error("QNN model download error:", e);
               new Notice(`✗ Failed to download QNN model: ${e.message}`, 8000);
             } finally {
               await this.display();

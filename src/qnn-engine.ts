@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { spawn } from "child_process";
 import * as os from "os";
 import { QnnModelKey, QnnPowerMode, TranscriptSegment } from "./types";
@@ -152,6 +152,43 @@ export function getQnnDirs(pluginManifestDir: string): {
 }
 
 /**
+ * Resolves the tar executable on Windows, checking System32 first.
+ */
+function getTarCommand(): string {
+  if (process.platform === "win32") {
+    const sysTar = path.join(
+      process.env.SystemRoot || "C:\\Windows",
+      "System32",
+      "tar.exe"
+    );
+    if (existsSync(sysTar)) return sysTar;
+    return "tar.exe";
+  }
+  return "tar";
+}
+
+/**
+ * Recursively locates any .exe and .dll files in sourceDir and copies them into destDir.
+ */
+async function copyBinariesToRoot(sourceDir: string, destDir: string): Promise<void> {
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(sourceDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyBinariesToRoot(fullPath, destDir);
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (ext === ".exe" || ext === ".dll" || !path.extname(entry.name)) {
+        const target = path.join(destDir, entry.name);
+        if (fullPath !== target) {
+          await fs.copyFile(fullPath, target).catch(() => {});
+        }
+      }
+    }
+  }
+}
+
+/**
  * Checks if the QNN / ONNX runner executable exists.
  */
 export function checkQnnBinary(
@@ -179,6 +216,19 @@ export function checkQnnBinary(
     }
   }
 
+  // Check if any subdirectories contain sherpa-onnx-offline.exe
+  if (existsSync(binDir)) {
+    try {
+      const entries = readdirSync(binDir);
+      for (const entry of entries) {
+        const subExe = path.join(binDir, entry, "bin", "sherpa-onnx-offline.exe");
+        if (existsSync(subExe)) return { path: subExe, exists: true };
+        const directExe = path.join(binDir, entry, "sherpa-onnx-offline.exe");
+        if (existsSync(directExe)) return { path: directExe, exists: true };
+      }
+    } catch {}
+  }
+
   return { path: path.join(binDir, "sherpa-onnx-offline.exe"), exists: false };
 }
 
@@ -202,12 +252,47 @@ export function checkQnnModel(
     ? customModelDir.trim()
     : path.join(modelsDir, info.folderName);
 
-  const encoderPath = path.join(targetDir, info.encoderName);
-  const decoderPath = path.join(targetDir, info.decoderName);
-  const tokensPath = path.join(targetDir, info.tokensName);
+  let encoderPath = path.join(targetDir, info.encoderName);
+  let decoderPath = path.join(targetDir, info.decoderName);
+  let tokensPath = path.join(targetDir, info.tokensName);
 
-  const exists =
+  let exists =
     existsSync(encoderPath) && existsSync(decoderPath) && existsSync(tokensPath);
+
+  // If not found in targetDir, check modelsDir root
+  if (!exists) {
+    const rootEncoder = path.join(modelsDir, info.encoderName);
+    const rootDecoder = path.join(modelsDir, info.decoderName);
+    const rootTokens = path.join(modelsDir, info.tokensName);
+    if (existsSync(rootEncoder) && existsSync(rootDecoder) && existsSync(rootTokens)) {
+      return {
+        dir: modelsDir,
+        encoderPath: rootEncoder,
+        decoderPath: rootDecoder,
+        tokensPath: rootTokens,
+        exists: true,
+      };
+    }
+  }
+
+  // If still not found, check if files exist with generic names in targetDir
+  if (!exists && existsSync(targetDir)) {
+    try {
+      const files = readdirSync(targetDir);
+      const enc = files.find((f) => f.includes("encoder") && f.endsWith(".onnx"));
+      const dec = files.find((f) => f.includes("decoder") && f.endsWith(".onnx"));
+      const tok = files.find((f) => f.includes("tokens") && f.endsWith(".txt"));
+      if (enc && dec && tok) {
+        return {
+          dir: targetDir,
+          encoderPath: path.join(targetDir, enc),
+          decoderPath: path.join(targetDir, dec),
+          tokensPath: path.join(targetDir, tok),
+          exists: true,
+        };
+      }
+    } catch {}
+  }
 
   return {
     dir: targetDir,
@@ -233,43 +318,31 @@ export async function downloadAndInstallQnnRunner(
 
   const tempArchive = path.join(os.tmpdir(), `qnn-runner-${Date.now()}.tar.bz2`);
 
-  if (onProgress) onProgress("Downloading QNN/ONNX runner binary...", 10);
+  if (onProgress) onProgress("Connecting to download QNN runner...", 5);
   await downloadFileWithProgress(asset.url, tempArchive, (pct) => {
     if (onProgress) onProgress(`Downloading QNN runner (${pct}%)...`, pct);
   });
 
-  if (onProgress) onProgress("Extracting runner binaries...", 90);
+  if (onProgress) onProgress("Extracting runner binaries...", 95);
 
-  // Extract using Windows built-in tar (bsdtar handles tar.bz2 natively)
+  const tarExe = getTarCommand();
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("tar", ["-xf", tempArchive, "-C", binDir], {
+    const child = spawn(tarExe, ["-xf", tempArchive, "-C", binDir], {
       windowsHide: true,
     });
     child.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`Extraction failed with exit code ${code}`));
+      else reject(new Error(`Runner extraction failed with exit code ${code}`));
     });
-    child.on("error", (err) => reject(err));
+    child.on("error", (err) => reject(new Error(`Failed to execute tar: ${err.message}`)));
   });
 
   // Clean up archive
   await fs.unlink(tempArchive).catch(() => {});
 
-  // If contents extracted into a single subdirectory, promote them
+  // Copy all binaries and DLLs recursively into binDir root so DLLs resolve automatically
   try {
-    const entries = await fs.readdir(binDir, { withFileTypes: true });
-    const subdirs = entries.filter((e) => e.isDirectory());
-    for (const sub of subdirs) {
-      const subPath = path.join(binDir, sub.name);
-      const subEntries = await fs.readdir(subPath);
-      for (const item of subEntries) {
-        const src = path.join(subPath, item);
-        const dest = path.join(binDir, item);
-        if (!existsSync(dest)) {
-          await fs.cp(src, dest, { recursive: true });
-        }
-      }
-    }
+    await copyBinariesToRoot(binDir, binDir);
   } catch {}
 
   const binInfo = checkQnnBinary(pluginManifestDir);
@@ -300,16 +373,16 @@ export async function downloadQnnModel(
   const tempArchive = path.join(os.tmpdir(), `qnn-model-${Date.now()}.tar.bz2`);
   await downloadFileWithProgress(info.url, tempArchive, onProgress);
 
-  // Extract model archive
+  const tarExe = getTarCommand();
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("tar", ["-xf", tempArchive, "-C", modelsDir], {
+    const child = spawn(tarExe, ["-xf", tempArchive, "-C", modelsDir], {
       windowsHide: true,
     });
     child.on("close", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`Model extraction failed with exit code ${code}`));
     });
-    child.on("error", (err) => reject(err));
+    child.on("error", (err) => reject(new Error(`Failed to execute tar: ${err.message}`)));
   });
 
   await fs.unlink(tempArchive).catch(() => {});

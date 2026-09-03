@@ -47,48 +47,95 @@ export const WHISPER_MODELS: Record<string, WhisperModelInfo> = {
 export const WHISPER_RELEASE_ZIP =
   "https://github.com/ggml-org/whisper.cpp/releases/latest/download/whisper-bin-x64.zip";
 
+import * as https from "https";
+import * as http from "http";
+
 /**
- * Downloads a file from URL to destPath with a progress callback.
+ * Downloads a file from URL to destPath using Node's streaming https/http client.
+ * Completely immune to Chromium/Electron CORS restrictions on GitHub release assets,
+ * recursively follows 301/302 redirects, and provides real-time byte progress.
  */
 export async function downloadFileWithProgress(
   url: string,
   destPath: string,
-  onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
+  onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void,
+  maxRedirects = 10
 ): Promise<void> {
   await fs.mkdir(path.dirname(destPath), { recursive: true });
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Failed to download from ${url}: HTTP ${res.status} ${res.statusText}`);
-  }
-
-  const contentLength = res.headers.get("content-length");
-  const total = contentLength ? parseInt(contentLength, 10) : 0;
-  let loaded = 0;
-
-  if (!res.body) {
-    throw new Error("Response body is null");
-  }
-
-  const reader = res.body.getReader();
-  const fileHandle = await fs.open(destPath, "w");
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        await fileHandle.write(value);
-        loaded += value.length;
-        if (total > 0 && onProgress) {
-          const percent = Math.min(100, Math.round((loaded / total) * 100));
-          onProgress(percent, loaded, total);
-        }
+  return new Promise<void>((resolve, reject) => {
+    function get(currentUrl: string, redirectsLeft: number) {
+      if (redirectsLeft <= 0) {
+        return reject(new Error(`Too many redirects while downloading from ${url}`));
       }
+
+      const client = currentUrl.startsWith("https:") ? https : http;
+      const req = client.get(
+        currentUrl,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Obsidian-Plaud-Sync/1.2.0",
+            Accept: "*/*",
+          },
+        },
+        (res) => {
+          if (
+            [301, 302, 303, 307, 308].includes(res.statusCode || 0) &&
+            res.headers.location
+          ) {
+            const redirectUrl = new URL(res.headers.location, currentUrl).toString();
+            return get(redirectUrl, redirectsLeft - 1);
+          }
+
+          if (res.statusCode !== 200) {
+            return reject(
+              new Error(
+                `Failed to download from ${currentUrl}: HTTP ${res.statusCode} ${res.statusMessage}`
+              )
+            );
+          }
+
+          const contentLength = res.headers["content-length"];
+          const total = contentLength ? parseInt(contentLength, 10) : 0;
+          let loaded = 0;
+
+          const file = createWriteStream(destPath);
+
+          res.on("data", (chunk: Buffer) => {
+            loaded += chunk.length;
+            if (total > 0 && onProgress) {
+              const percent = Math.min(100, Math.round((loaded / total) * 100));
+              onProgress(percent, loaded, total);
+            }
+          });
+
+          res.pipe(file);
+
+          file.on("finish", () => {
+            file.close(() => resolve());
+          });
+
+          file.on("error", async (err) => {
+            try {
+              file.close();
+              await fs.unlink(destPath);
+            } catch {}
+            reject(err);
+          });
+        }
+      );
+
+      req.on("error", (err) => {
+        reject(new Error(`Network error downloading ${url}: ${err.message}`));
+      });
+
+      req.setTimeout(60000, () => {
+        req.destroy(new Error(`Timeout downloading from ${url}`));
+      });
     }
-  } finally {
-    await fileHandle.close();
-  }
+
+    get(url, maxRedirects);
+  });
 }
 
 /**
