@@ -63,6 +63,36 @@ categories:
 
 ---
 
+## 📦 Installation
+
+### Method 1: Via BRAT (Recommended for Auto-Updates)
+The fastest way to install and keep the plugin updated directly from GitHub:
+1. In Obsidian, install and enable the **BRAT** community plugin (*Beta Reviewer's Auto-update Tester*).
+2. Open the Obsidian Command Palette (`Ctrl+P` or `Cmd+P`) and run **BRAT: Add a beta plugin for testing**.
+3. Enter repository: `bitlifter/obsidian-plaud-sync`
+4. Click **Add Plugin**. Obsidian will download the release assets and enable the plugin automatically.
+
+### Method 2: Manual Installation
+1. Go to the [Releases](https://github.com/bitlifter/obsidian-plaud-sync/releases) page on GitHub and download `main.js`, `manifest.json`, and `styles.css`.
+2. Inside your Obsidian vault folder, create a directory at:
+   ```
+   <Your-Vault>/.obsidian/plugins/plaud-to-obsidian/
+   ```
+   *(Note: The `.obsidian` folder may be hidden by default on Windows and macOS. Enable "Show hidden files and folders" in your file manager).*
+3. Place `main.js`, `manifest.json`, and `styles.css` into that directory.
+4. In Obsidian, go to **Settings** $\rightarrow$ **Community Plugins**, click the reload icon (🔄) next to "Installed plugins", and toggle **Plaud to Obsidian** to **ON**.
+
+### Method 3: Build from Source
+```bash
+git clone https://github.com/bitlifter/obsidian-plaud-sync.git
+cd obsidian-plaud-sync
+npm install
+npm run build
+```
+Copy `main.js`, `manifest.json`, and `styles.css` into `<Your-Vault>/.obsidian/plugins/plaud-to-obsidian/`.
+
+---
+
 ## 🚀 Quickstart
 
 ### Option A: Local Offline Mode (Whisper.cpp / Snapdragon NPU)
