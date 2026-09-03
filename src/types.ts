@@ -1,6 +1,8 @@
 export type AIProvider = "gemini" | "openai_compatible";
-export type TranscriptionEngine = "plaud_cloud" | "whisper_cpp";
+export type TranscriptionEngine = "plaud_cloud" | "whisper_cpp" | "qnn_npu";
 export type WhisperModelKey = "tiny.en" | "base.en" | "small.en" | "large-v3-turbo";
+export type QnnPowerMode = "burst" | "high_performance" | "balanced" | "low_power";
+export type QnnModelKey = "tiny.en" | "base.en" | "small.en" | "turbo";
 
 export interface PlaudPluginSettings {
   targetNotesFolder: string;
@@ -11,6 +13,11 @@ export interface PlaudPluginSettings {
   localAudioFolder: string;
   customWhisperBinaryPath: string;
   customWhisperModelPath: string;
+  qnnModel: QnnModelKey;
+  qnnPowerMode: QnnPowerMode;
+  customQnnBinaryPath: string;
+  customQnnModelPath: string;
+  customQnnBackendPath: string;
   aiProvider: AIProvider;
   geminiApiKey: string;
   geminiModel: string;
@@ -39,6 +46,11 @@ export const DEFAULT_SETTINGS: PlaudPluginSettings = {
   localAudioFolder: "Attachments/Inbox",
   customWhisperBinaryPath: "",
   customWhisperModelPath: "",
+  qnnModel: "base.en",
+  qnnPowerMode: "high_performance",
+  customQnnBinaryPath: "",
+  customQnnModelPath: "",
+  customQnnBackendPath: "",
   aiProvider: "gemini",
   geminiApiKey: "",
   geminiModel: "gemini-3.6-flash",

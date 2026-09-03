@@ -8,6 +8,14 @@ import {
   downloadWhisperModel,
   WHISPER_MODELS
 } from "./whisper-engine";
+import {
+  detectSnapdragonHardware,
+  checkQnnBinary,
+  checkQnnModel,
+  downloadAndInstallQnnRunner,
+  downloadQnnModel,
+  QNN_MODELS
+} from "./qnn-engine";
 
 export class PlaudSettingTab extends PluginSettingTab {
   private plugin: PlaudPlugin;
@@ -95,16 +103,32 @@ export class PlaudSettingTab extends PluginSettingTab {
           })
       );
 
-    // 3. Offline Speech-to-Text (Whisper)
-    containerEl.createEl("h3", { text: "Offline Speech-to-Text (Whisper)" });
+    // 3. Offline Speech-to-Text (Whisper & Snapdragon NPU)
+    containerEl.createEl("h3", { text: "Offline Speech-to-Text (Whisper & Snapdragon NPU)" });
+
+    const hw = detectSnapdragonHardware();
+    const hwEl = containerEl.createDiv({ cls: "setting-item-description" });
+    hwEl.style.padding = "10px 14px";
+    hwEl.style.marginBottom = "14px";
+    hwEl.style.borderRadius = "6px";
+    if (hw.isSnapdragon) {
+      hwEl.style.backgroundColor = "rgba(46, 204, 113, 0.15)";
+      hwEl.style.border = "1px solid rgba(46, 204, 113, 0.4)";
+      hwEl.innerHTML = `<strong>⚡ Hardware Detected:</strong> ${hw.processorName} (${hw.npuTops} TOPS Hexagon NPU)<br><span style="color: var(--text-muted); font-size: 0.85em;">${hw.recommendation}</span>`;
+    } else {
+      hwEl.style.backgroundColor = "rgba(52, 152, 219, 0.1)";
+      hwEl.style.border = "1px solid rgba(52, 152, 219, 0.3)";
+      hwEl.innerHTML = `<strong>💻 Architecture Detected:</strong> ${hw.processorName} (${process.arch})<br><span style="color: var(--text-muted); font-size: 0.85em;">${hw.recommendation}</span>`;
+    }
 
     new Setting(containerEl)
       .setName("Transcription Engine")
-      .setDesc("Choose whether to use Plaud Cloud or local offline Whisper.cpp for audio transcription.")
+      .setDesc("Choose whether to use Plaud Cloud, local whisper.cpp (CPU), or Snapdragon NPU (Qualcomm QNN).")
       .addDropdown(drop => {
         drop
           .addOption("plaud_cloud", "Plaud Cloud (Default)")
-          .addOption("whisper_cpp", "Local Whisper.cpp (100% Offline)")
+          .addOption("whisper_cpp", "Local Whisper.cpp (CPU / Standard)")
+          .addOption("qnn_npu", "Snapdragon NPU (Qualcomm QNN - Hardware Accelerated)")
           .setValue(this.plugin.settings.transcriptionEngine || "plaud_cloud")
           .onChange(async val => {
             this.plugin.settings.transcriptionEngine = val as any;
@@ -127,77 +151,184 @@ export class PlaudSettingTab extends PluginSettingTab {
       );
 
     const pluginDir = this.plugin.syncEngine.getPluginDir();
-    const binInfo = checkWhisperBinary(pluginDir, this.plugin.settings.customWhisperBinaryPath);
-    const modelInfo = checkWhisperModel(
-      this.plugin.settings.whisperModel || "base.en",
-      pluginDir,
-      this.plugin.settings.customWhisperModelPath
-    );
 
-    new Setting(containerEl)
-      .setName("Whisper Model")
-      .setDesc("Select the model size. Base is balanced; Small and Large offer higher accuracy.")
-      .addDropdown(drop => {
-        for (const [key, info] of Object.entries(WHISPER_MODELS)) {
-          drop.addOption(key, info.name);
-        }
-        drop
-          .setValue(this.plugin.settings.whisperModel || "base.en")
-          .onChange(async val => {
-            this.plugin.settings.whisperModel = val as any;
-            await this.plugin.saveSettings();
-            this.display();
+    // Render Snapdragon NPU (QNN) Configuration
+    if (this.plugin.settings.transcriptionEngine === "qnn_npu") {
+      new Setting(containerEl)
+        .setName("Snapdragon NPU Model")
+        .setDesc("Select the ONNX Whisper model optimized for Snapdragon Hexagon NPU inference.")
+        .addDropdown(drop => {
+          for (const [key, info] of Object.entries(QNN_MODELS)) {
+            drop.addOption(key, info.name);
+          }
+          drop
+            .setValue(this.plugin.settings.qnnModel || "base.en")
+            .onChange(async val => {
+              this.plugin.settings.qnnModel = val as any;
+              await this.plugin.saveSettings();
+              this.display();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("NPU Power Mode")
+        .setDesc("Configure Qualcomm Hexagon NPU power profile (Burst is fastest; High Performance recommended).")
+        .addDropdown(drop => {
+          drop
+            .addOption("burst", "Burst (Fastest Batch)")
+            .addOption("high_performance", "High Performance (Recommended)")
+            .addOption("balanced", "Balanced (Low Power)")
+            .addOption("low_power", "Power Saver")
+            .setValue(this.plugin.settings.qnnPowerMode || "high_performance")
+            .onChange(async val => {
+              this.plugin.settings.qnnPowerMode = val as any;
+              await this.plugin.saveSettings();
+            });
+        });
+
+      const qnnBinInfo = checkQnnBinary(pluginDir, this.plugin.settings.customQnnBinaryPath);
+      const qnnModelInfo = checkQnnModel(
+        this.plugin.settings.qnnModel || "base.en",
+        pluginDir,
+        this.plugin.settings.customQnnModelPath
+      );
+
+      const qnnStatusDesc = [
+        `QNN Runner: ${qnnBinInfo.exists ? `✓ Installed (${qnnBinInfo.path})` : "✗ Not installed"}`,
+        `QNN Model: ${qnnModelInfo.exists ? `✓ Ready (${qnnModelInfo.dir})` : "✗ Not downloaded"}`
+      ].join(" | ");
+
+      const qnnEngineSetting = new Setting(containerEl)
+        .setName("QNN Engine & Model Status")
+        .setDesc(qnnStatusDesc);
+
+      qnnEngineSetting.addButton(btn => {
+        btn
+          .setButtonText(qnnBinInfo.exists ? "Reinstall QNN Runner" : "Download QNN Runner")
+          .onClick(async () => {
+            btn.setButtonText("Downloading...").setDisabled(true);
+            try {
+              await downloadAndInstallQnnRunner(pluginDir, (msg) => {
+                new Notice(msg, 3000);
+              });
+              new Notice("✓ QNN speech runner installed successfully!");
+            } catch (e: any) {
+              new Notice(`✗ Failed to install QNN runner: ${e.message}`, 8000);
+            } finally {
+              await this.display();
+            }
           });
       });
 
-    const statusDesc = [
-      `Engine Binary: ${binInfo.exists ? `✓ Installed (${binInfo.path})` : "✗ Not installed"}`,
-      `Selected Model: ${modelInfo.exists ? `✓ Installed (${modelInfo.path})` : "✗ Not downloaded"}`
-    ].join(" | ");
+      qnnEngineSetting.addButton(btn => {
+        btn
+          .setButtonText(qnnModelInfo.exists ? "Re-download QNN Model" : "Download QNN Model")
+          .onClick(async () => {
+            btn.setButtonText("Downloading...").setDisabled(true);
+            try {
+              const mKey = this.plugin.settings.qnnModel || "base.en";
+              const size = QNN_MODELS[mKey]?.sizeMb || 199;
+              new Notice(`Downloading QNN model ${mKey} (~${size} MB)...`, 5000);
+              await downloadQnnModel(mKey, pluginDir, (pct) => {
+                if (pct % 20 === 0 || pct === 100) {
+                  new Notice(`Downloading QNN ${mKey}: ${pct}%`, 2000);
+                }
+              });
+              new Notice(`✓ QNN model ${mKey} downloaded and extracted!`);
+            } catch (e: any) {
+              new Notice(`✗ Failed to download QNN model: ${e.message}`, 8000);
+            } finally {
+              await this.display();
+            }
+          });
+      });
 
-    const engineSetting = new Setting(containerEl)
-      .setName("Engine & Model Status")
-      .setDesc(statusDesc);
+      new Setting(containerEl)
+        .setName("Custom QNN HTP Backend Path (Optional)")
+        .setDesc("Absolute path to QnnHtp.dll if utilizing a custom Qualcomm AI Engine Direct SDK installation.")
+        .addText(text =>
+          text
+            .setPlaceholder("C:\\path\\to\\QnnHtp.dll")
+            .setValue(this.plugin.settings.customQnnBackendPath || "")
+            .onChange(async val => {
+              this.plugin.settings.customQnnBackendPath = val.trim();
+              await this.plugin.saveSettings();
+            })
+        );
+    } else if (this.plugin.settings.transcriptionEngine === "whisper_cpp") {
+      // Render Whisper.cpp Configuration
+      const binInfo = checkWhisperBinary(pluginDir, this.plugin.settings.customWhisperBinaryPath);
+      const modelInfo = checkWhisperModel(
+        this.plugin.settings.whisperModel || "base.en",
+        pluginDir,
+        this.plugin.settings.customWhisperModelPath
+      );
 
-    engineSetting.addButton(btn => {
-      btn
-        .setButtonText(binInfo.exists ? "Reinstall Engine" : "Download Whisper Engine")
-        .onClick(async () => {
-          btn.setButtonText("Downloading...").setDisabled(true);
-          try {
-            await downloadAndInstallWhisperEngine(pluginDir, (msg) => {
-              new Notice(msg, 3000);
-            });
-            new Notice("✓ Whisper engine installed successfully!");
-          } catch (e: any) {
-            new Notice(`✗ Failed to install Whisper engine: ${e.message}`, 8000);
-          } finally {
-            await this.display();
+      new Setting(containerEl)
+        .setName("Whisper Model")
+        .setDesc("Select the model size. Base is balanced; Small and Large offer higher accuracy.")
+        .addDropdown(drop => {
+          for (const [key, info] of Object.entries(WHISPER_MODELS)) {
+            drop.addOption(key, info.name);
           }
-        });
-    });
-
-    engineSetting.addButton(btn => {
-      btn
-        .setButtonText(modelInfo.exists ? "Re-download Model" : "Download Model")
-        .onClick(async () => {
-          btn.setButtonText("Downloading...").setDisabled(true);
-          try {
-            const mKey = this.plugin.settings.whisperModel || "base.en";
-            new Notice(`Downloading ${mKey} model (~${WHISPER_MODELS[mKey]?.sizeMb || 140} MB)...`, 5000);
-            await downloadWhisperModel(mKey, pluginDir, (pct) => {
-              if (pct % 20 === 0 || pct === 100) {
-                new Notice(`Downloading ${mKey}: ${pct}%`, 2000);
-              }
+          drop
+            .setValue(this.plugin.settings.whisperModel || "base.en")
+            .onChange(async val => {
+              this.plugin.settings.whisperModel = val as any;
+              await this.plugin.saveSettings();
+              this.display();
             });
-            new Notice(`✓ Model ${mKey} downloaded successfully!`);
-          } catch (e: any) {
-            new Notice(`✗ Failed to download model: ${e.message}`, 8000);
-          } finally {
-            await this.display();
-          }
         });
-    });
+
+      const statusDesc = [
+        `Engine Binary: ${binInfo.exists ? `✓ Installed (${binInfo.path})` : "✗ Not installed"}`,
+        `Selected Model: ${modelInfo.exists ? `✓ Installed (${modelInfo.path})` : "✗ Not downloaded"}`
+      ].join(" | ");
+
+      const engineSetting = new Setting(containerEl)
+        .setName("Engine & Model Status")
+        .setDesc(statusDesc);
+
+      engineSetting.addButton(btn => {
+        btn
+          .setButtonText(binInfo.exists ? "Reinstall Engine" : "Download Whisper Engine")
+          .onClick(async () => {
+            btn.setButtonText("Downloading...").setDisabled(true);
+            try {
+              await downloadAndInstallWhisperEngine(pluginDir, (msg) => {
+                new Notice(msg, 3000);
+              });
+              new Notice("✓ Whisper engine installed successfully!");
+            } catch (e: any) {
+              new Notice(`✗ Failed to install Whisper engine: ${e.message}`, 8000);
+            } finally {
+              await this.display();
+            }
+          });
+      });
+
+      engineSetting.addButton(btn => {
+        btn
+          .setButtonText(modelInfo.exists ? "Re-download Model" : "Download Model")
+          .onClick(async () => {
+            btn.setButtonText("Downloading...").setDisabled(true);
+            try {
+              const mKey = this.plugin.settings.whisperModel || "base.en";
+              new Notice(`Downloading ${mKey} model (~${WHISPER_MODELS[mKey]?.sizeMb || 140} MB)...`, 5000);
+              await downloadWhisperModel(mKey, pluginDir, (pct) => {
+                if (pct % 20 === 0 || pct === 100) {
+                  new Notice(`Downloading ${mKey}: ${pct}%`, 2000);
+                }
+              });
+              new Notice(`✓ Model ${mKey} downloaded successfully!`);
+            } catch (e: any) {
+              new Notice(`✗ Failed to download model: ${e.message}`, 8000);
+            } finally {
+              await this.display();
+            }
+          });
+      });
+    }
 
     new Setting(containerEl)
       .setName("Process Local Audio Inbox")

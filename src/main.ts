@@ -108,9 +108,23 @@ export default class PlaudPlugin extends Plugin {
 
     this.addCommand({
       id: "plaud-process-inbox",
-      name: "Process local audio inbox with Whisper",
+      name: "Process local audio inbox (Whisper / Snapdragon NPU)",
       callback: async () => {
         await this.syncEngine.processLocalAudioInbox();
+      }
+    });
+
+    this.addCommand({
+      id: "plaud-process-inbox-npu",
+      name: "Process local audio inbox with Snapdragon NPU (QNN)",
+      callback: async () => {
+        const prev = this.settings.transcriptionEngine;
+        this.settings.transcriptionEngine = "qnn_npu";
+        try {
+          await this.syncEngine.processLocalAudioInbox();
+        } finally {
+          this.settings.transcriptionEngine = prev;
+        }
       }
     });
 
@@ -118,10 +132,11 @@ export default class PlaudPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
         if (file instanceof TFile && ["mp3", "wav", "m4a", "webm", "aac", "ogg"].includes(file.extension.toLowerCase())) {
+          const isNpu = this.settings.transcriptionEngine === "qnn_npu";
           menu.addItem(item => {
             item
-              .setTitle("Transcribe with Local Whisper")
-              .setIcon("mic")
+              .setTitle(isNpu ? "Transcribe with Snapdragon NPU (QNN)" : "Transcribe with Local Whisper")
+              .setIcon(isNpu ? "zap" : "mic")
               .onClick(async () => {
                 try {
                   await this.syncEngine.transcribeLocalAudioFile(file);

@@ -1,6 +1,6 @@
 {
   "name": "obsidian-plaud-sync",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Sync Plaud AI recordings, summaries, transcripts, master audio, and speaker identities into Obsidian.",
   "main": "main.js",
   "scripts": {

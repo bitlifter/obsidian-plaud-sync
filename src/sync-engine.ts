@@ -5,6 +5,12 @@ import { enrichMeetingData, transcribeAudioGemini, summarizeTranscript } from ".
 import { createTemp16kWavFile } from "./audio-converter";
 import { checkWhisperBinary, checkWhisperModel, runWhisperCli } from "./whisper-engine";
 import {
+  checkQnnBinary,
+  checkQnnModel,
+  runQnnTranscription,
+  detectSnapdragonHardware,
+} from "./qnn-engine";
+import {
   parsePlaudDate,
   formatDuration,
   formatNoteTitle,
@@ -242,10 +248,39 @@ export class PlaudSyncEngine {
           let speakerMap: Record<string, string> = {};
 
           if (transcriptSegments.length === 0 && !summaryContent && audioBuffer) {
-            // Option A: Local Whisper if configured
-            if (this.settings.transcriptionEngine === "whisper_cpp") {
+            // Option A: Snapdragon NPU (QNN) if configured
+            if (this.settings.transcriptionEngine === "qnn_npu") {
               try {
-                await this.log(`  └─ 🎙️ Untranscribed audio detected. Transcribing with local Whisper (${this.settings.whisperModel})...`);
+                await this.log(`  └─ ⚡ Untranscribed audio detected. Transcribing with Snapdragon NPU / QNN (${this.settings.qnnModel})...`);
+                const pluginDir = this.getPluginDir();
+                const binInfo = checkQnnBinary(pluginDir, this.settings.customQnnBinaryPath);
+                const modelInfo = checkQnnModel(this.settings.qnnModel, pluginDir, this.settings.customQnnModelPath);
+                if (binInfo.exists && modelInfo.exists) {
+                  const { wavPath, cleanup } = await createTemp16kWavFile(audioBuffer);
+                  try {
+                    transcriptSegments = await runQnnTranscription({
+                      binaryPath: binInfo.path,
+                      modelDir: modelInfo.dir,
+                      audioWavPath: wavPath,
+                      powerMode: this.settings.qnnPowerMode,
+                      customBackendPath: this.settings.customQnnBackendPath
+                    });
+                  } finally {
+                    await cleanup();
+                  }
+                  await this.log(`  └─ ✓ Snapdragon NPU transcription completed (${transcriptSegments.length} segments)`);
+                } else {
+                  await this.log(`  └─ ⚠️ QNN runner or model not found. Falling back.`);
+                }
+              } catch (qnnErr: any) {
+                await this.log(`  └─ ⚠️ Snapdragon NPU failed: ${qnnErr.message}`);
+              }
+            }
+
+            // Option B: Local Whisper (whisper.cpp) if configured or fallback
+            if (transcriptSegments.length === 0 && (this.settings.transcriptionEngine === "whisper_cpp" || this.settings.transcriptionEngine === "qnn_npu")) {
+              try {
+                await this.log(`  └─ 🎙️ Transcribing with local Whisper (${this.settings.whisperModel})...`);
                 const pluginDir = this.getPluginDir();
                 const binInfo = checkWhisperBinary(pluginDir, this.settings.customWhisperBinaryPath);
                 const modelInfo = checkWhisperModel(this.settings.whisperModel, pluginDir, this.settings.customWhisperModelPath);
@@ -392,26 +427,11 @@ export class PlaudSyncEngine {
 
   public async transcribeLocalAudioFile(audioFile: TFile): Promise<string> {
     await this.log(`=== Processing Local Audio File: ${audioFile.path} ===`);
-    new Notice(`Transcribing "${audioFile.name}" with local Whisper...`, 6000);
+    const useQnn = this.settings.transcriptionEngine === "qnn_npu";
+    const engineLabel = useQnn ? "Snapdragon NPU (QNN)" : "local Whisper";
+    new Notice(`Transcribing "${audioFile.name}" with ${engineLabel}...`, 6000);
 
     const pluginDir = this.getPluginDir();
-    const binInfo = checkWhisperBinary(pluginDir, this.settings.customWhisperBinaryPath);
-    if (!binInfo.exists) {
-      const msg = "Whisper binary not found. Please click 'Download Whisper Engine' in Plaud Sync Settings.";
-      new Notice(msg, 7000);
-      throw new Error(msg);
-    }
-
-    const modelInfo = checkWhisperModel(
-      this.settings.whisperModel,
-      pluginDir,
-      this.settings.customWhisperModelPath
-    );
-    if (!modelInfo.exists) {
-      const msg = `Whisper model (${this.settings.whisperModel}) not found. Please click 'Download Model' in Plaud Sync Settings.`;
-      new Notice(msg, 7000);
-      throw new Error(msg);
-    }
 
     // 1. Read audio buffer from vault
     const rawAudioBuffer = await this.app.vault.readBinary(audioFile);
@@ -422,19 +442,71 @@ export class PlaudSyncEngine {
 
     let segments: TranscriptSegment[] = [];
     try {
-      await this.log(`  └─ Running whisper.cpp (${this.settings.whisperModel})...`);
-      segments = await runWhisperCli({
-        binaryPath: binInfo.path,
-        modelPath: modelInfo.path,
-        wavPath
-      });
-      await this.log(`  └─ ✓ Whisper transcription complete: ${segments.length} segments.`);
+      if (useQnn) {
+        const qnnBin = checkQnnBinary(pluginDir, this.settings.customQnnBinaryPath);
+        const qnnModel = checkQnnModel(this.settings.qnnModel, pluginDir, this.settings.customQnnModelPath);
+
+        if (!qnnBin.exists || !qnnModel.exists) {
+          // Check if whisper.cpp is available as a fallback
+          const wBin = checkWhisperBinary(pluginDir, this.settings.customWhisperBinaryPath);
+          const wModel = checkWhisperModel(this.settings.whisperModel, pluginDir, this.settings.customWhisperModelPath);
+          if (wBin.exists && wModel.exists) {
+            await this.log("  └─ ⚠️ QNN runner/model not found; falling back to Whisper.cpp CPU engine.");
+            segments = await runWhisperCli({
+              binaryPath: wBin.path,
+              modelPath: wModel.path,
+              wavPath,
+            });
+          } else {
+            const missing = !qnnBin.exists ? "QNN runner binary" : `QNN model (${this.settings.qnnModel})`;
+            const msg = `${missing} not found. Please click 'Download QNN Runner/Model' in Plaud Sync Settings.`;
+            new Notice(msg, 7000);
+            throw new Error(msg);
+          }
+        } else {
+          await this.log(`  └─ ⚡ Running Snapdragon NPU / QNN transcription (${this.settings.qnnModel})...`);
+          segments = await runQnnTranscription({
+            binaryPath: qnnBin.path,
+            modelDir: qnnModel.dir,
+            audioWavPath: wavPath,
+            powerMode: this.settings.qnnPowerMode,
+            customBackendPath: this.settings.customQnnBackendPath,
+          });
+          await this.log(`  └─ ✓ Snapdragon NPU transcription complete: ${segments.length} segments.`);
+        }
+      } else {
+        const binInfo = checkWhisperBinary(pluginDir, this.settings.customWhisperBinaryPath);
+        if (!binInfo.exists) {
+          const msg = "Whisper binary not found. Please click 'Download Whisper Engine' in Plaud Sync Settings.";
+          new Notice(msg, 7000);
+          throw new Error(msg);
+        }
+
+        const modelInfo = checkWhisperModel(
+          this.settings.whisperModel,
+          pluginDir,
+          this.settings.customWhisperModelPath
+        );
+        if (!modelInfo.exists) {
+          const msg = `Whisper model (${this.settings.whisperModel}) not found. Please click 'Download Model' in Plaud Sync Settings.`;
+          new Notice(msg, 7000);
+          throw new Error(msg);
+        }
+
+        await this.log(`  └─ Running whisper.cpp (${this.settings.whisperModel})...`);
+        segments = await runWhisperCli({
+          binaryPath: binInfo.path,
+          modelPath: modelInfo.path,
+          wavPath,
+        });
+        await this.log(`  └─ ✓ Whisper transcription complete: ${segments.length} segments.`);
+      }
     } finally {
       await cleanup();
     }
 
     if (segments.length === 0) {
-      throw new Error("Whisper completed but produced no transcript segments (audio may be silent).");
+      throw new Error("Transcription completed but produced no text segments (audio may be silent).");
     }
 
     // 3. Summarize and enrich transcript
