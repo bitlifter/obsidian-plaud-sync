@@ -2,6 +2,27 @@ import { Notice } from "obsidian";
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import { downloadFileWithProgress } from "./whisper-engine";
+
+export function getCompanionExeName(): string {
+  return process.arch === "arm64" ? "recorder-arm64.exe" : "recorder-x64.exe";
+}
+
+export function checkCompanionInstalled(binDir: string): boolean {
+  const exePath = path.join(binDir, getCompanionExeName());
+  return fs.existsSync(exePath);
+}
+
+export async function downloadCompanionDaemon(
+  binDir: string,
+  onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
+): Promise<string> {
+  const exeName = getCompanionExeName();
+  const url = `https://github.com/bitlifter/obsidian-plaud-sync/releases/download/1.5.0/${exeName}`;
+  const destPath = path.join(binDir, exeName);
+  await downloadFileWithProgress(url, destPath, onProgress);
+  return destPath;
+}
 
 export interface DetectedMeeting {
   app: string;
@@ -179,9 +200,7 @@ export class DaemonClient {
   public launchDaemon(binDir: string, vaultDir: string) {
     if (this.isConnected) return;
 
-    // Detect architecture (ARM64 vs x64)
-    const isArm64 = process.arch === "arm64";
-    const exeName = isArm64 ? "recorder-arm64.exe" : "recorder-x64.exe";
+    const exeName = getCompanionExeName();
     const exePath = path.join(binDir, exeName);
 
     if (!fs.existsSync(exePath)) {

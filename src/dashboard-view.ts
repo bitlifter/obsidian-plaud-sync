@@ -1,10 +1,19 @@
-import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
-import { DaemonClient, DaemonEvent, TickEvent } from "./daemon-client";
+import { ItemView, WorkspaceLeaf, setIcon, Notice } from "obsidian";
+import {
+  DaemonClient,
+  DaemonEvent,
+  TickEvent,
+  checkCompanionInstalled,
+  getCompanionExeName,
+  downloadCompanionDaemon
+} from "./daemon-client";
+import type PlaudPlugin from "./main";
 
 export const VIEW_TYPE_LIVE_MEETING_DASHBOARD = "live-meeting-dashboard-view";
 
 export class LiveMeetingDashboardView extends ItemView {
   private daemon: DaemonClient;
+  private plugin?: PlaudPlugin;
   private unsubscribe: (() => void) | null = null;
 
   private statusBadgeEl!: HTMLElement;
@@ -20,9 +29,10 @@ export class LiveMeetingDashboardView extends ItemView {
   private captureBtn!: HTMLButtonElement;
   private onStopAndProcessCallback?: (filePath: string, durationSec: number, meetingTitle?: string) => void;
 
-  constructor(leaf: WorkspaceLeaf, daemon: DaemonClient) {
+  constructor(leaf: WorkspaceLeaf, daemon: DaemonClient, plugin?: PlaudPlugin) {
     super(leaf);
     this.daemon = daemon;
+    this.plugin = plugin;
   }
 
   getViewType(): string {
@@ -54,6 +64,45 @@ export class LiveMeetingDashboardView extends ItemView {
     titleRow.createEl("h3", { text: "Meeting Monitor" });
 
     this.statusBadgeEl = header.createDiv({ cls: "plaud-status-badge plaud-status-idle", text: "IDLE" });
+
+    // Check if companion binary is installed
+    if (this.plugin) {
+      const binDir = this.plugin.resolveBinDir();
+      const isInstalled = checkCompanionInstalled(binDir);
+      const exeName = getCompanionExeName();
+
+      if (!isInstalled) {
+        const banner = container.createDiv({ cls: "plaud-companion-banner" });
+        banner.createDiv({ cls: "plaud-companion-banner-title", text: "Companion Daemon Missing" });
+        banner.createDiv({
+          cls: "plaud-companion-banner-desc",
+          text: `BRAT only installs plugin scripts. The background recorder (${exeName}) is needed for auto-recording.`
+        });
+        const dlBtn = banner.createEl("button", {
+          cls: "mod-cta plaud-btn",
+          text: `Download ${exeName}`,
+        });
+        dlBtn.onclick = async () => {
+          dlBtn.disabled = true;
+          dlBtn.textContent = "Downloading...";
+          new Notice(`Downloading ${exeName} from GitHub releases...`, 15000);
+          try {
+            await downloadCompanionDaemon(binDir, (percent) => {
+              dlBtn.textContent = `Downloading (${percent}%)...`;
+            });
+            new Notice(`✓ Installed ${exeName}! Starting daemon...`, 6000);
+            const attachmentsDir = this.plugin!.resolveAttachmentsDir();
+            this.daemon.launchDaemon(binDir, attachmentsDir);
+            await this.onOpen();
+          } catch (e: any) {
+            console.error("[DashboardView] Failed to download companion:", e);
+            new Notice(`Download failed: ${e.message}`, 8000);
+            dlBtn.disabled = false;
+            dlBtn.textContent = `Download ${exeName}`;
+          }
+        };
+      }
+    }
 
     // Meeting Details Card
     const card = container.createDiv({ cls: "plaud-meeting-card" });

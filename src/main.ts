@@ -66,7 +66,7 @@ export default class PlaudPlugin extends Plugin {
     this.registerView(
       VIEW_TYPE_LIVE_MEETING_DASHBOARD,
       (leaf: WorkspaceLeaf) => {
-        const view = new LiveMeetingDashboardView(leaf, this.daemonClient!);
+        const view = new LiveMeetingDashboardView(leaf, this.daemonClient!, this);
         view.setOnStopAndProcess(async (filePath, durationSec, meetingTitle) => {
           await this.handleRecordingStopped(filePath, durationSec, meetingTitle);
         });
@@ -322,7 +322,7 @@ export default class PlaudPlugin extends Plugin {
     });
   }
 
-  private resolveBinDir(): string {
+  public resolveBinDir(): string {
     const pluginDir = this.syncEngine.getPluginDir();
     const candidatePaths = [
       path.join(pluginDir, "bin"),
@@ -334,7 +334,7 @@ export default class PlaudPlugin extends Plugin {
     return candidatePaths[0];
   }
 
-  private resolveAttachmentsDir(): string {
+  public resolveAttachmentsDir(): string {
     const adapter = this.app.vault.adapter as any;
     const basePath = adapter.getBasePath ? adapter.getBasePath() : "";
     if (basePath) {

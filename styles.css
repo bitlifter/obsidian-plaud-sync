@@ -188,3 +188,24 @@
   border-radius: 6px;
   font-weight: 500;
 }
+
+.plaud-companion-banner {
+  background-color: rgba(243, 156, 18, 0.12);
+  border: 1px solid var(--text-warning, #f39c12);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plaud-companion-banner-title {
+  font-weight: 600;
+  color: var(--text-warning, #f39c12);
+  font-size: 0.9em;
+}
+
+.plaud-companion-banner-desc {
+  font-size: 0.85em;
+  color: var(--text-muted);
+}

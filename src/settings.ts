@@ -17,6 +17,11 @@ import {
   QNN_MODELS
 } from "./qnn-engine";
 import { startPlaudOAuthLogin } from "./oauth";
+import {
+  checkCompanionInstalled,
+  getCompanionExeName,
+  downloadCompanionDaemon
+} from "./daemon-client";
 
 export class PlaudSettingTab extends PluginSettingTab {
   private plugin: PlaudPlugin;
@@ -645,6 +650,67 @@ export class PlaudSettingTab extends PluginSettingTab {
             }
           })
       );
+
+    const binDir = this.plugin.resolveBinDir();
+    const isCompanionInstalled = checkCompanionInstalled(binDir);
+    const companionExe = getCompanionExeName();
+
+    const companionBinarySetting = new Setting(containerEl)
+      .setName("Companion Daemon Executable")
+      .setDesc(
+        isCompanionInstalled
+          ? `✓ Installed: bin/${companionExe}`
+          : `Binary missing (bin/${companionExe}). BRAT does not download companion executables. Click below to install it directly from GitHub.`
+      );
+
+    if (!isCompanionInstalled) {
+      companionBinarySetting.addButton(btn =>
+        btn
+          .setButtonText(`Download ${companionExe}`)
+          .setCta()
+          .onClick(async () => {
+            btn.setDisabled(true);
+            btn.setButtonText("Downloading...");
+            new Notice(`Downloading Meeting Recorder Companion (${companionExe})...`, 15000);
+            try {
+              await downloadCompanionDaemon(binDir, (percent) => {
+                btn.setButtonText(`Downloading (${percent}%)...`);
+              });
+              new Notice(`✓ Companion daemon (${companionExe}) installed!`, 6000);
+              this.display();
+              const attachmentsDir = this.plugin.resolveAttachmentsDir();
+              this.plugin.daemonClient?.launchDaemon(binDir, attachmentsDir);
+            } catch (err: any) {
+              console.error("[PlaudSettings] Failed to download companion:", err);
+              new Notice(`Download failed: ${err.message}`, 8000);
+              btn.setDisabled(false);
+              btn.setButtonText(`Download ${companionExe}`);
+            }
+          })
+      );
+    } else {
+      companionBinarySetting.addButton(btn =>
+        btn
+          .setButtonText("Re-download Binary")
+          .onClick(async () => {
+            btn.setDisabled(true);
+            btn.setButtonText("Downloading...");
+            new Notice(`Re-downloading ${companionExe}...`, 15000);
+            try {
+              await downloadCompanionDaemon(binDir, (percent) => {
+                btn.setButtonText(`Downloading (${percent}%)...`);
+              });
+              new Notice(`✓ Companion binary updated!`, 5000);
+              this.display();
+            } catch (err: any) {
+              console.error("[PlaudSettings] Failed to update companion:", err);
+              new Notice(`Update failed: ${err.message}`, 8000);
+              btn.setDisabled(false);
+              btn.setButtonText("Re-download Binary");
+            }
+          })
+      );
+    }
 
     // 5. Automation & Actions
     containerEl.createEl("h3", { text: "Automation & Manual Sync" });
