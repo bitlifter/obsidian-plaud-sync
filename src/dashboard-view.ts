@@ -84,17 +84,19 @@ export class LiveMeetingDashboardView extends ItemView {
         });
         dlBtn.onclick = async () => {
           dlBtn.disabled = true;
-          dlBtn.textContent = "Downloading...";
-          new Notice(`Downloading ${exeName} from GitHub releases...`, 15000);
+          const notice = new Notice(`Downloading ${exeName} from GitHub releases...`, 0);
           try {
             await downloadCompanionDaemon(binDir, (percent) => {
               dlBtn.textContent = `Downloading (${percent}%)...`;
+              notice.setMessage(`Downloading ${exeName}: ${percent}%`);
             });
+            notice.hide();
             new Notice(`✓ Installed ${exeName}! Starting daemon...`, 6000);
             const attachmentsDir = this.plugin!.resolveAttachmentsDir();
             this.daemon.launchDaemon(binDir, attachmentsDir);
             await this.onOpen();
           } catch (e: any) {
+            notice.hide();
             console.error("[DashboardView] Failed to download companion:", e);
             new Notice(`Download failed: ${e.message}`, 8000);
             dlBtn.disabled = false;

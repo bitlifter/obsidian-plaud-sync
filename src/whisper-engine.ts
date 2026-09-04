@@ -108,12 +108,19 @@ export async function downloadFileWithProgress(
           let loaded = 0;
 
           const file = createWriteStream(destPath);
+          let lastReportedPercent = -1;
+          let lastReportedTime = 0;
 
           res.on("data", (chunk: Buffer) => {
             loaded += chunk.length;
             if (total > 0 && onProgress) {
               const percent = Math.min(100, Math.round((loaded / total) * 100));
-              onProgress(percent, loaded, total);
+              const now = Date.now();
+              if (percent === 100 || (percent !== lastReportedPercent && now - lastReportedTime >= 100)) {
+                lastReportedPercent = percent;
+                lastReportedTime = now;
+                onProgress(percent, loaded, total);
+              }
             }
           });
 

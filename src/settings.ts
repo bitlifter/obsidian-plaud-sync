@@ -224,21 +224,19 @@ export class PlaudSettingTab extends PluginSettingTab {
         btn
           .setButtonText(qnnBinInfo.exists ? "Reinstall QNN Runner" : "Download QNN Runner")
           .onClick(async () => {
-            btn.setButtonText("Downloading...").setDisabled(true);
+            btn.setDisabled(true);
+            const notice = new Notice("Downloading QNN runner...", 0);
             try {
-              let lastNoticeTime = 0;
               await downloadAndInstallQnnRunner(pluginDir, (msg, pct) => {
                 if (pct !== undefined && pct > 0) {
                   btn.setButtonText(`Downloading (${pct}%)...`);
                 }
-                const now = Date.now();
-                if (now - lastNoticeTime > 3000 || pct === 100 || !pct) {
-                  lastNoticeTime = now;
-                  new Notice(msg, 2500);
-                }
+                notice.setMessage(msg);
               });
-              new Notice("✓ QNN speech runner installed successfully!");
+              notice.hide();
+              new Notice("✓ QNN speech runner installed successfully!", 5000);
             } catch (e: any) {
+              notice.hide();
               console.error("QNN runner install error:", e);
               new Notice(`✗ Failed to install QNN runner: ${e.message}`, 8000);
             } finally {
@@ -251,21 +249,19 @@ export class PlaudSettingTab extends PluginSettingTab {
         btn
           .setButtonText(qnnModelInfo.exists ? "Re-download QNN Model" : "Download QNN Model")
           .onClick(async () => {
-            btn.setButtonText("Downloading...").setDisabled(true);
+            btn.setDisabled(true);
+            const mKey = this.plugin.settings.qnnModel || "base.en";
+            const size = QNN_MODELS[mKey]?.sizeMb || 199;
+            const notice = new Notice(`Downloading QNN model ${mKey} (~${size} MB)...`, 0);
             try {
-              const mKey = this.plugin.settings.qnnModel || "base.en";
-              const size = QNN_MODELS[mKey]?.sizeMb || 199;
-              new Notice(`Downloading QNN model ${mKey} (~${size} MB)...`, 5000);
-              let lastNoticePct = -1;
               await downloadQnnModel(mKey, pluginDir, (pct) => {
                 btn.setButtonText(`Downloading (${pct}%)...`);
-                if (pct >= lastNoticePct + 15 || pct === 100) {
-                  lastNoticePct = pct;
-                  new Notice(`Downloading QNN ${mKey}: ${pct}%`, 2000);
-                }
+                notice.setMessage(`Downloading QNN ${mKey}: ${pct}%`);
               });
-              new Notice(`✓ QNN model ${mKey} downloaded and extracted!`);
+              notice.hide();
+              new Notice(`✓ QNN model ${mKey} downloaded and extracted!`, 5000);
             } catch (e: any) {
+              notice.hide();
               console.error("QNN model download error:", e);
               new Notice(`✗ Failed to download QNN model: ${e.message}`, 8000);
             } finally {
@@ -324,13 +320,19 @@ export class PlaudSettingTab extends PluginSettingTab {
         btn
           .setButtonText(binInfo.exists ? "Reinstall Engine" : "Download Whisper Engine")
           .onClick(async () => {
-            btn.setButtonText("Downloading...").setDisabled(true);
+            btn.setDisabled(true);
+            const notice = new Notice("Downloading Whisper engine...", 0);
             try {
-              await downloadAndInstallWhisperEngine(pluginDir, (msg) => {
-                new Notice(msg, 3000);
+              await downloadAndInstallWhisperEngine(pluginDir, (msg, pct) => {
+                if (pct !== undefined && pct > 0) {
+                  btn.setButtonText(`Downloading (${pct}%)...`);
+                }
+                notice.setMessage(msg);
               });
-              new Notice("✓ Whisper engine installed successfully!");
+              notice.hide();
+              new Notice("✓ Whisper engine installed successfully!", 5000);
             } catch (e: any) {
+              notice.hide();
               new Notice(`✗ Failed to install Whisper engine: ${e.message}`, 8000);
             } finally {
               await this.display();
@@ -342,17 +344,24 @@ export class PlaudSettingTab extends PluginSettingTab {
         btn
           .setButtonText(modelInfo.exists ? "Re-download Model" : "Download Model")
           .onClick(async () => {
-            btn.setButtonText("Downloading...").setDisabled(true);
+            btn.setDisabled(true);
+            const mKey = this.plugin.settings.whisperModel || "base.en";
+            const notice = new Notice(`Downloading ${mKey} model...`, 0);
             try {
-              const mKey = this.plugin.settings.whisperModel || "base.en";
-              new Notice(`Downloading ${mKey} model (~${WHISPER_MODELS[mKey]?.sizeMb || 140} MB)...`, 5000);
-              await downloadWhisperModel(mKey, pluginDir, (pct) => {
-                if (pct % 20 === 0 || pct === 100) {
-                  new Notice(`Downloading ${mKey}: ${pct}%`, 2000);
+              await downloadWhisperModel(mKey, pluginDir, (pct, loaded, total) => {
+                btn.setButtonText(`Downloading (${pct}%)...`);
+                if (total > 0) {
+                  const loadedMb = (loaded / (1024 * 1024)).toFixed(1);
+                  const totalMb = (total / (1024 * 1024)).toFixed(1);
+                  notice.setMessage(`Downloading ${mKey}: ${pct}% (${loadedMb} / ${totalMb} MB)`);
+                } else {
+                  notice.setMessage(`Downloading ${mKey}: ${pct}%`);
                 }
               });
-              new Notice(`✓ Model ${mKey} downloaded successfully!`);
+              notice.hide();
+              new Notice(`✓ Model ${mKey} downloaded successfully!`, 5000);
             } catch (e: any) {
+              notice.hide();
               new Notice(`✗ Failed to download model: ${e.message}`, 8000);
             } finally {
               await this.display();
@@ -670,17 +679,19 @@ export class PlaudSettingTab extends PluginSettingTab {
           .setCta()
           .onClick(async () => {
             btn.setDisabled(true);
-            btn.setButtonText("Downloading...");
-            new Notice(`Downloading Meeting Recorder Companion (${companionExe})...`, 15000);
+            const notice = new Notice(`Downloading Meeting Recorder Companion (${companionExe})...`, 0);
             try {
               await downloadCompanionDaemon(binDir, (percent) => {
                 btn.setButtonText(`Downloading (${percent}%)...`);
+                notice.setMessage(`Downloading ${companionExe}: ${percent}%`);
               });
+              notice.hide();
               new Notice(`✓ Companion daemon (${companionExe}) installed!`, 6000);
               this.display();
               const attachmentsDir = this.plugin.resolveAttachmentsDir();
               this.plugin.daemonClient?.launchDaemon(binDir, attachmentsDir);
             } catch (err: any) {
+              notice.hide();
               console.error("[PlaudSettings] Failed to download companion:", err);
               new Notice(`Download failed: ${err.message}`, 8000);
               btn.setDisabled(false);
@@ -694,15 +705,17 @@ export class PlaudSettingTab extends PluginSettingTab {
           .setButtonText("Re-download Binary")
           .onClick(async () => {
             btn.setDisabled(true);
-            btn.setButtonText("Downloading...");
-            new Notice(`Re-downloading ${companionExe}...`, 15000);
+            const notice = new Notice(`Re-downloading ${companionExe}...`, 0);
             try {
               await downloadCompanionDaemon(binDir, (percent) => {
                 btn.setButtonText(`Downloading (${percent}%)...`);
+                notice.setMessage(`Downloading ${companionExe}: ${percent}%`);
               });
+              notice.hide();
               new Notice(`✓ Companion binary updated!`, 5000);
               this.display();
             } catch (err: any) {
+              notice.hide();
               console.error("[PlaudSettings] Failed to update companion:", err);
               new Notice(`Update failed: ${err.message}`, 8000);
               btn.setDisabled(false);

@@ -3,7 +3,7 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +29,8 @@ pub struct AudioRecorder {
     is_recording: Arc<AtomicBool>,
     is_paused: Arc<AtomicBool>,
     start_time: Arc<Mutex<Option<Instant>>>,
+    total_paused_duration: Arc<Mutex<Duration>>,
+    pause_start: Arc<Mutex<Option<Instant>>>,
     current_levels: Arc<Mutex<AudioLevels>>,
     current_path: Arc<Mutex<Option<PathBuf>>>,
     stop_signal: Arc<AtomicBool>,
@@ -41,6 +43,8 @@ impl AudioRecorder {
             is_recording: Arc::new(AtomicBool::new(false)),
             is_paused: Arc::new(AtomicBool::new(false)),
             start_time: Arc::new(Mutex::new(None)),
+            total_paused_duration: Arc::new(Mutex::new(Duration::default())),
+            pause_start: Arc::new(Mutex::new(None)),
             current_levels: Arc::new(Mutex::new(AudioLevels {
                 mic_db: -60.0,
                 system_db: -60.0,
@@ -64,6 +68,8 @@ impl AudioRecorder {
         self.is_paused.store(false, Ordering::SeqCst);
         self.is_recording.store(true, Ordering::SeqCst);
         *self.start_time.lock() = Some(Instant::now());
+        *self.total_paused_duration.lock() = Duration::default();
+        *self.pause_start.lock() = None;
         *self.current_path.lock() = Some(output_path.clone());
 
         let is_recording = self.is_recording.clone();
@@ -95,19 +101,27 @@ impl AudioRecorder {
         self.is_recording.store(false, Ordering::SeqCst);
         self.is_paused.store(false, Ordering::SeqCst);
         *self.start_time.lock() = None;
+        *self.pause_start.lock() = None;
+        *self.total_paused_duration.lock() = Duration::default();
 
         self.current_path.lock().take()
     }
 
     pub fn pause(&self) {
-        if self.is_recording.load(Ordering::SeqCst) {
-            self.is_paused.store(true, Ordering::SeqCst);
+        if self.is_recording.load(Ordering::SeqCst) && !self.is_paused.swap(true, Ordering::SeqCst) {
+            *self.pause_start.lock() = Some(Instant::now());
+            *self.current_levels.lock() = AudioLevels {
+                mic_db: -60.0,
+                system_db: -60.0,
+            };
         }
     }
 
     pub fn resume(&self) {
-        if self.is_recording.load(Ordering::SeqCst) {
-            self.is_paused.store(false, Ordering::SeqCst);
+        if self.is_recording.load(Ordering::SeqCst) && self.is_paused.swap(false, Ordering::SeqCst) {
+            if let Some(p_start) = self.pause_start.lock().take() {
+                *self.total_paused_duration.lock() += p_start.elapsed();
+            }
         }
     }
 
@@ -115,7 +129,13 @@ impl AudioRecorder {
         let is_rec = self.is_recording.load(Ordering::SeqCst);
         let is_p = self.is_paused.load(Ordering::SeqCst);
         let elapsed = if let Some(start) = *self.start_time.lock() {
-            start.elapsed().as_secs_f64()
+            let total_paused = *self.total_paused_duration.lock();
+            let current_pause = if is_p {
+                self.pause_start.lock().map(|p| p.elapsed()).unwrap_or_default()
+            } else {
+                Duration::default()
+            };
+            start.elapsed().saturating_sub(total_paused + current_pause).as_secs_f64()
         } else {
             0.0
         };
@@ -176,6 +196,8 @@ fn record_thread_loop(
 
     let loop_start = Instant::now();
     let mut total_written_frames: u64 = 0;
+    let mut total_paused_time = Duration::default();
+    let mut pause_start_time: Option<Instant> = None;
     let mut last_meter_update = Instant::now();
     let mut mic_sum_sq = 0.0f32;
     let mut mic_samples_count = 0usize;
@@ -184,8 +206,24 @@ fn record_thread_loop(
 
     while !stop_signal.load(Ordering::SeqCst) {
         if is_paused.load(Ordering::SeqCst) {
+            if pause_start_time.is_none() {
+                pause_start_time = Some(Instant::now());
+                *levels.lock() = AudioLevels {
+                    mic_db: -60.0,
+                    system_db: -60.0,
+                };
+            }
             std::thread::sleep(std::time::Duration::from_millis(50));
             continue;
+        } else if let Some(p_start) = pause_start_time.take() {
+            total_paused_time += p_start.elapsed();
+            // Drain any residual audio samples buffered by driver during pause
+            if let Some(ref mut s) = mic_session {
+                let _ = s.read_samples();
+            }
+            if let Some(ref mut s) = sys_session {
+                let _ = s.read_samples();
+            }
         }
 
         // Read up to 20ms of audio
@@ -226,8 +264,9 @@ fn record_thread_loop(
             }
             total_written_frames += max_len as u64;
         } else {
-            // Keep audio stream perfectly synchronized with wall-clock time
-            let expected_frames = (loop_start.elapsed().as_secs_f64() * 16000.0) as u64;
+            // Keep audio stream perfectly synchronized with active recording duration
+            let active_elapsed = loop_start.elapsed().saturating_sub(total_paused_time);
+            let expected_frames = (active_elapsed.as_secs_f64() * 16000.0) as u64;
             let frames_to_pad = expected_frames.saturating_sub(total_written_frames);
             for _ in 0..frames_to_pad {
                 let _ = writer.write_sample(0i16);

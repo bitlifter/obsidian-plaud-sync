@@ -70,7 +70,7 @@ unsafe extern "system" fn enum_window_callback(hwnd: HWND, lparam: LPARAM) -> BO
     let mut detected_app: Option<&str> = None;
 
     // 1. Microsoft Teams
-    if (process_name.contains("teams") || process_name.contains("ms-teams")) {
+    if process_name.contains("teams") || process_name.contains("ms-teams") {
         let is_non_meeting_tab = title_lower.starts_with("calendar")
             || title_lower.starts_with("chat")
             || title_lower.starts_with("activity")
