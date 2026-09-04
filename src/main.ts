@@ -7,6 +7,9 @@ import { PlaudSyncEngine } from "./sync-engine";
 import { PlaudSettingTab } from "./settings";
 import { DaemonClient, DaemonEvent, SlideCapturedEvent, RecordingStoppedEvent } from "./daemon-client";
 import { LiveMeetingDashboardView, VIEW_TYPE_LIVE_MEETING_DASHBOARD } from "./dashboard-view";
+import { checkWhisperBinary, checkWhisperModel } from "./whisper-engine";
+import { checkQnnBinary, checkQnnModel } from "./qnn-engine";
+import { sanitizeFilename, formatDuration, formatNoteTitle } from "./extractor";
 
 class SyncLogModal extends Modal {
   private logContent: string;
@@ -381,13 +384,100 @@ export default class PlaudPlugin extends Plugin {
       }
 
       if (targetTFile) {
-        new Notice(`Transcribing "${targetTFile.name}" with ${this.settings.transcriptionEngine}...`, 6000);
-        await this.syncEngine.transcribeLocalAudioFile(targetTFile);
-        new Notice(`✓ Meeting note generated for "${targetTFile.name}"!`, 8000);
+        const pluginDir = this.syncEngine.getPluginDir();
+        const useQnn = this.settings.transcriptionEngine === "qnn_npu";
+
+        let canTranscribe = false;
+        if (useQnn) {
+          const qBin = checkQnnBinary(pluginDir, this.settings.customQnnBinaryPath);
+          const qMod = checkQnnModel(this.settings.qnnModel, pluginDir, this.settings.customQnnModelPath);
+          canTranscribe = qBin.exists && qMod.exists;
+        } else {
+          const wBin = checkWhisperBinary(pluginDir, this.settings.customWhisperBinaryPath);
+          const wMod = checkWhisperModel(this.settings.whisperModel, pluginDir, this.settings.customWhisperModelPath);
+          canTranscribe = wBin.exists && wMod.exists;
+        }
+
+        if (canTranscribe) {
+          try {
+            const engineLabel = useQnn ? "Snapdragon NPU" : "Whisper";
+            new Notice(`Transcribing "${targetTFile.name}" with ${engineLabel}...`, 6000);
+            await this.syncEngine.transcribeLocalAudioFile(targetTFile);
+            new Notice(`✓ Meeting note generated for "${targetTFile.name}"!`, 8000);
+            return;
+          } catch (transcribeErr: any) {
+            console.warn("[PlaudPlugin] Transcription error, falling back to note creation:", transcribeErr);
+          }
+        }
+
+        // Whisper or QNN is not installed yet: Create clean note with audio player & instructions
+        await this.createRecordingNoteWithAudio(targetTFile, durationSec, meetingTitle);
+        new Notice(`✓ Recording saved! Note created with audio playback.`, 8000);
       }
     } catch (err: any) {
-      console.error("[PlaudPlugin] Auto-transcription error:", err);
-      new Notice(`Auto-transcription failed: ${err.message}`, 8000);
+      console.error("[PlaudPlugin] Note creation error:", err);
+      new Notice(`Failed to save recording note: ${err.message}`, 8000);
+    }
+  }
+
+  private async createRecordingNoteWithAudio(
+    audioFile: TFile,
+    durationSec: number,
+    meetingTitle?: string
+  ) {
+    const rawTitle = meetingTitle || audioFile.basename.replace(/^\d{8}_\d{6}_/, "").trim() || "Meeting Recording";
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    const durationStr = formatDuration(Math.round(durationSec));
+
+    const safeTitle = sanitizeFilename(rawTitle, 80);
+    const noteTitle = formatNoteTitle(dateStr, safeTitle);
+    const noteVaultPath = normalizePath(`${this.settings.targetNotesFolder}/${noteTitle}.md`);
+
+    const noteContent = [
+      "---",
+      `title: "${noteTitle}"`,
+      `date: ${dateStr}`,
+      `time: "${timeStr}"`,
+      `duration: "${durationStr}"`,
+      `audio: "[[${audioFile.path}]]"`,
+      "tags:",
+      "  - meeting",
+      "  - audio-recording",
+      "---",
+      "",
+      `# ${noteTitle}`,
+      "",
+      `![[${audioFile.path}]]`,
+      "",
+      "> [!INFO] Local Transcription Engine Pending",
+      `> Audio was recorded successfully (${durationStr}) and saved to \`${audioFile.path}\`.`,
+      "> To generate automated timestamped transcripts and AI summaries:",
+      "> 1. Open **Settings** → **Plaud Sync**",
+      "> 2. Click **Download Whisper Engine** or **Download Qualcomm QNN Runner**",
+      "> 3. Right-click this audio file in Obsidian and choose **Transcribe with Local Whisper / Snapdragon NPU**",
+      "",
+      "## 📝 Meeting Notes",
+      "",
+      "- ",
+      "",
+    ].join("\n");
+
+    await this.syncEngine.ensureFolder(this.settings.targetNotesFolder);
+    const existing = this.app.vault.getAbstractFileByPath(noteVaultPath);
+    if (existing instanceof TFile) {
+      await this.app.vault.modify(existing, noteContent);
+    } else {
+      await this.app.vault.create(noteVaultPath, noteContent);
+    }
+
+    const noteFile = this.app.vault.getAbstractFileByPath(noteVaultPath);
+    if (noteFile instanceof TFile) {
+      const leaf = this.app.workspace.getLeaf(false);
+      if (leaf) {
+        await leaf.openFile(noteFile);
+      }
     }
   }
 

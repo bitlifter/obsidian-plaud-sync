@@ -70,14 +70,29 @@ unsafe extern "system" fn enum_window_callback(hwnd: HWND, lparam: LPARAM) -> BO
     let mut detected_app: Option<&str> = None;
 
     // 1. Microsoft Teams
-    if (process_name.contains("teams") || process_name.contains("ms-teams"))
-        && (title_lower.contains("|") || title_lower.contains("meeting") || title_lower.contains("call"))
-    {
-        detected_app = Some("Microsoft Teams");
+    if (process_name.contains("teams") || process_name.contains("ms-teams")) {
+        let is_non_meeting_tab = title_lower.starts_with("calendar")
+            || title_lower.starts_with("chat")
+            || title_lower.starts_with("activity")
+            || title_lower.starts_with("teams |")
+            || title_lower.starts_with("calls |")
+            || title_lower.starts_with("files |")
+            || title_lower.starts_with("apps |")
+            || title_lower.starts_with("assignments |");
+
+        let is_actual_call = title_lower.contains("meeting")
+            || title_lower.contains("call")
+            || title_lower.contains("huddle")
+            || title_lower.ends_with(", meeting")
+            || title_lower.ends_with(", call");
+
+        if !is_non_meeting_tab && is_actual_call {
+            detected_app = Some("Microsoft Teams");
+        }
     }
     // 2. Zoom
     else if process_name.contains("zoom")
-        && (title_lower.contains("zoom meeting") || title_lower.contains("zoom workplace") || title_lower.contains("zoom"))
+        && (title_lower.contains("zoom meeting") || title_lower.contains("zoom webinar"))
     {
         detected_app = Some("Zoom");
     }

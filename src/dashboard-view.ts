@@ -175,6 +175,19 @@ export class LiveMeetingDashboardView extends ItemView {
     if (event.type === "tick") {
       this.updateFromTick(event);
     } else if (event.type === "recording_stopped") {
+      this.statusBadgeEl.textContent = "IDLE";
+      this.statusBadgeEl.className = "plaud-status-badge plaud-status-idle";
+      this.pauseResumeBtn.disabled = true;
+      this.stopBtn.disabled = true;
+      this.captureBtn.disabled = true;
+      this.meetingAppEl.textContent = "No meeting active";
+      this.meetingTitleEl.textContent = "Waiting for Teams, Zoom, or Meet...";
+      this.timerEl.textContent = "00:00";
+      this.micMeterEl.style.width = "0%";
+      this.micDbEl.textContent = "-60 dB";
+      this.sysMeterEl.style.width = "0%";
+      this.sysDbEl.textContent = "-60 dB";
+
       if (this.onStopAndProcessCallback) {
         this.onStopAndProcessCallback(
           event.file_path,

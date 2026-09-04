@@ -74,7 +74,7 @@ export class PlaudSyncEngine {
     return "No sync logs recorded yet.";
   }
 
-  private async ensureFolder(folderPath: string): Promise<void> {
+  public async ensureFolder(folderPath: string): Promise<void> {
     const normalized = normalizePath(folderPath);
     if (!normalized || normalized === "/" || normalized === ".") return;
 

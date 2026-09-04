@@ -49,10 +49,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, _rx) = broadcast::channel(64);
     let recorder = Arc::new(Mutex::new(AudioRecorder::new()));
     let active_meeting = Arc::new(Mutex::new(None::<DetectedMeeting>));
+    let dismissed_meeting_hwnd = Arc::new(Mutex::new(None::<isize>));
 
     let server_ctx = Arc::new(ServerContext {
         recorder: recorder.clone(),
         active_meeting: active_meeting.clone(),
+        dismissed_meeting_hwnd: dismissed_meeting_hwnd.clone(),
         vault_attachments_dir: vault_dir.clone(),
         tx: tx.clone(),
     });
@@ -112,7 +114,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *active_meeting.lock() = Some(meeting.clone());
             }
 
-            if args.auto_record && !is_recording {
+            let is_dismissed = {
+                let dismissed = dismissed_meeting_hwnd.lock();
+                dismissed.as_ref() == Some(&meeting.hwnd)
+            };
+
+            if args.auto_record && !is_recording && !is_dismissed {
                 let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
                 let sanitized_title = meeting
                     .title
@@ -129,6 +136,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         } else {
+            // Meeting is no longer detected, reset dismissed HWND
+            *dismissed_meeting_hwnd.lock() = None;
+
             // Meeting is no longer detected
             if is_recording {
                 if let Some(last_seen) = last_seen_meeting {
