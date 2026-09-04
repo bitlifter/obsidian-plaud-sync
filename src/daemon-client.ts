@@ -18,7 +18,7 @@ export async function downloadCompanionDaemon(
   onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
 ): Promise<string> {
   const exeName = getCompanionExeName();
-  const url = `https://github.com/bitlifter/obsidian-plaud-sync/releases/download/1.5.0/${exeName}`;
+  const url = `https://github.com/bitlifter/obsidian-plaud-sync/releases/latest/download/${exeName}`;
   const destPath = path.join(binDir, exeName);
   await downloadFileWithProgress(url, destPath, onProgress);
   return destPath;
@@ -72,12 +72,18 @@ export interface SlideCapturedEvent {
   timecode_formatted: string;
 }
 
+export interface FeatureToggledEvent {
+  type: "feature_toggled";
+  enabled: boolean;
+}
+
 export type DaemonEvent =
   | TickEvent
   | MeetingDetectedEvent
   | RecordingStartedEvent
   | RecordingStoppedEvent
-  | SlideCapturedEvent;
+  | SlideCapturedEvent
+  | FeatureToggledEvent;
 
 export class DaemonClient {
   private ws: WebSocket | null = null;
@@ -191,6 +197,14 @@ export class DaemonClient {
 
   public captureSlide() {
     this.sendCommand({ command: "capture_slide" });
+  }
+
+  public setFeatureEnabled(enabled: boolean) {
+    this.sendCommand({ command: "set_feature_enabled", enabled });
+  }
+
+  public exitDaemon() {
+    this.sendCommand({ command: "exit" });
   }
 
   public getTimecode(): string {

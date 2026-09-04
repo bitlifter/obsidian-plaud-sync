@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,10 +14,12 @@ mod audio;
 mod detector;
 mod screenshot;
 mod server;
+mod tray;
 
 use audio::AudioRecorder;
 use detector::{scan_for_meetings, DetectedMeeting};
 use server::{format_timecode, run_websocket_server, ServerContext, ServerEvent};
+use tray::{spawn_tray, update_tray_status, TrayContext};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Standalone WASAPI Meeting Recorder Daemon", long_about = None)]
@@ -53,14 +56,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recorder = Arc::new(Mutex::new(AudioRecorder::new()));
     let active_meeting = Arc::new(Mutex::new(None::<DetectedMeeting>));
     let dismissed_meeting_hwnds = Arc::new(Mutex::new(HashSet::<isize>::new()));
+    let feature_enabled = Arc::new(AtomicBool::new(true));
 
     let server_ctx = Arc::new(ServerContext {
         recorder: recorder.clone(),
         active_meeting: active_meeting.clone(),
         dismissed_meeting_hwnds: dismissed_meeting_hwnds.clone(),
+        feature_enabled: feature_enabled.clone(),
         vault_attachments_dir: vault_dir.clone(),
         tx: tx.clone(),
     });
+
+    // Spawn Windows System Tray Icon Thread
+    spawn_tray(Arc::new(TrayContext {
+        feature_enabled: feature_enabled.clone(),
+        recorder: recorder.clone(),
+        active_meeting: active_meeting.clone(),
+        dismissed_meeting_hwnds: dismissed_meeting_hwnds.clone(),
+        tx: tx.clone(),
+    }));
 
     // Start WebSocket Server on background task
     let port = args.port;
@@ -99,8 +113,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grace_period = Duration::from_secs(15);
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
 
+    let mut last_tray_update = Instant::now();
+    let mut last_was_recording = false;
+    let mut last_was_enabled = true;
+
     loop {
         ticker.tick().await;
+
+        let is_enabled = feature_enabled.load(Ordering::Relaxed);
+
+        if !is_enabled {
+            // Feature is disabled: do not scan for meetings, do not auto-record
+            let status = recorder.lock().get_status();
+            if status.is_recording {
+                let saved = recorder.lock().stop();
+                let meeting_info = active_meeting.lock().take();
+                if let Some(path) = saved {
+                    let _ = tx.send(ServerEvent::RecordingStopped {
+                        file_path: path.to_string_lossy().to_string(),
+                        duration_seconds: status.elapsed_seconds,
+                        meeting: meeting_info,
+                    });
+                }
+            } else {
+                *active_meeting.lock() = None;
+            }
+
+            if last_was_enabled || last_tray_update.elapsed() > Duration::from_secs(5) {
+                update_tray_status(false, false, None);
+                last_was_enabled = false;
+                last_was_recording = false;
+                last_tray_update = Instant::now();
+            }
+
+            let status = recorder.lock().get_status();
+            let _ = tx.send(ServerEvent::Tick {
+                is_recording: false,
+                is_paused: false,
+                elapsed_seconds: 0.0,
+                timecode_formatted: "00:00".to_string(),
+                active_meeting: None,
+                levels: status.levels,
+            });
+            continue;
+        }
+
+        last_was_enabled = true;
 
         // Prune dismissed HWNDs if the window has been closed
         {
@@ -112,6 +170,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let detected = scan_for_meetings();
         let is_recording = recorder.lock().get_status().is_recording;
+
+        if is_recording != last_was_recording || last_tray_update.elapsed() > Duration::from_secs(5) {
+            let meeting_title = active_meeting.lock().as_ref().map(|m| m.title.clone());
+            update_tray_status(is_recording, is_enabled, meeting_title.as_deref());
+            last_was_recording = is_recording;
+            last_tray_update = Instant::now();
+        }
 
         if let Some(meeting) = detected {
             last_seen_meeting = Some(Instant::now());

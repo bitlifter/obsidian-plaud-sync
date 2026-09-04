@@ -621,14 +621,13 @@ export class PlaudSettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "Meeting Recorder Companion (Auto-Record)" });
 
     new Setting(containerEl)
-      .setName("Enable Companion Recorder Daemon")
-      .setDesc("Runs the standalone low-overhead WASAPI recorder in the background for meeting detection and dual-channel recording.")
+      .setName("Enable Live Meeting Recording Feature")
+      .setDesc("Master toggle for live meeting detection, background recording, and the companion app.")
       .addToggle(toggle =>
         toggle
           .setValue(this.plugin.settings.enableCompanionDaemon)
           .onChange(async val => {
-            this.plugin.settings.enableCompanionDaemon = val;
-            await this.plugin.saveSettings();
+            await this.plugin.toggleMeetingRecordingFeature(val);
           })
       );
 

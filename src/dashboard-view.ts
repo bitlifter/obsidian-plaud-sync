@@ -63,7 +63,41 @@ export class LiveMeetingDashboardView extends ItemView {
     setIcon(iconSpan, "audio-lines");
     titleRow.createEl("h3", { text: "Meeting Monitor" });
 
-    this.statusBadgeEl = header.createDiv({ cls: "plaud-status-badge plaud-status-idle", text: "IDLE" });
+    const headerRight = header.createDiv({ cls: "plaud-dashboard-header-right" });
+
+    const isFeatureEnabled = this.plugin?.settings.enableCompanionDaemon ?? true;
+    const toggleBtn = headerRight.createEl("button", {
+      cls: `plaud-feature-toggle-btn ${isFeatureEnabled ? "is-enabled" : "is-disabled"}`,
+      text: isFeatureEnabled ? "● Active" : "○ Disabled",
+    });
+    toggleBtn.title = isFeatureEnabled ? "Click to disable meeting recorder" : "Click to enable meeting recorder";
+    toggleBtn.onclick = async () => {
+      await this.plugin?.toggleMeetingRecordingFeature();
+      await this.onOpen();
+    };
+
+    this.statusBadgeEl = headerRight.createDiv({
+      cls: `plaud-status-badge ${isFeatureEnabled ? "plaud-status-idle" : "plaud-status-disabled"}`,
+      text: isFeatureEnabled ? "IDLE" : "DISABLED",
+    });
+
+    // Check if feature is disabled
+    if (!isFeatureEnabled) {
+      const disabledCard = container.createDiv({ cls: "plaud-disabled-banner" });
+      disabledCard.createEl("h4", { text: "⏸️ Meeting Recording is Suspended" });
+      disabledCard.createEl("p", {
+        text: "The background recorder is paused. It will not detect meetings or record audio until enabled."
+      });
+      const enableBtn = disabledCard.createEl("button", {
+        cls: "mod-cta plaud-btn",
+        text: "Enable Recording Feature",
+      });
+      enableBtn.onclick = async () => {
+        await this.plugin?.toggleMeetingRecordingFeature(true);
+        await this.onOpen();
+      };
+      return;
+    }
 
     // Check if companion binary is installed
     if (this.plugin) {
@@ -176,6 +210,8 @@ export class LiveMeetingDashboardView extends ItemView {
   private handleDaemonEvent(event: DaemonEvent) {
     if (event.type === "tick") {
       this.updateFromTick(event);
+    } else if (event.type === "feature_toggled") {
+      this.onOpen();
     } else if (event.type === "recording_stopped") {
       this.statusBadgeEl.textContent = "IDLE";
       this.statusBadgeEl.className = "plaud-status-badge plaud-status-idle";

@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
@@ -47,6 +48,8 @@ pub enum ServerEvent {
         timecode: f64,
         timecode_formatted: String,
     },
+    #[serde(rename = "feature_toggled")]
+    FeatureToggled { enabled: bool },
     #[serde(rename = "error")]
     Error { message: String },
 }
@@ -66,6 +69,10 @@ pub enum ClientCommand {
     CaptureSlide,
     #[serde(rename = "get_timecode")]
     GetTimecode,
+    #[serde(rename = "set_feature_enabled")]
+    SetFeatureEnabled { enabled: bool },
+    #[serde(rename = "exit")]
+    Exit,
     #[serde(rename = "ping")]
     Ping,
 }
@@ -74,6 +81,7 @@ pub struct ServerContext {
     pub recorder: Arc<Mutex<AudioRecorder>>,
     pub active_meeting: Arc<Mutex<Option<DetectedMeeting>>>,
     pub dismissed_meeting_hwnds: Arc<Mutex<std::collections::HashSet<isize>>>,
+    pub feature_enabled: Arc<AtomicBool>,
     pub vault_attachments_dir: std::path::PathBuf,
     pub tx: broadcast::Sender<ServerEvent>,
 }
@@ -209,6 +217,42 @@ fn handle_command(cmd: ClientCommand, ctx: &ServerContext) {
             let _ = ctx.tx.send(ServerEvent::Timecode {
                 timecode: elapsed,
                 timecode_formatted: formatted,
+            });
+        }
+        ClientCommand::SetFeatureEnabled { enabled } => {
+            let prev = ctx.feature_enabled.swap(enabled, Ordering::SeqCst);
+            log::info!("Recording feature toggled via WebSocket: {} (was {})", enabled, prev);
+            if !enabled {
+                let mut rec = ctx.recorder.lock();
+                let status = rec.get_status();
+                if let Some(path) = rec.stop() {
+                    let current_meeting = ctx.active_meeting.lock().clone();
+                    let _ = ctx.tx.send(ServerEvent::RecordingStopped {
+                        file_path: path.to_string_lossy().to_string(),
+                        duration_seconds: status.elapsed_seconds,
+                        meeting: current_meeting,
+                    });
+                }
+            }
+            crate::tray::update_tray_status(false, enabled, None);
+            let _ = ctx.tx.send(ServerEvent::FeatureToggled { enabled });
+        }
+        ClientCommand::Exit => {
+            log::info!("Client requested daemon exit via WebSocket. Shutting down...");
+            let mut rec = ctx.recorder.lock();
+            let status = rec.get_status();
+            if let Some(path) = rec.stop() {
+                let current_meeting = ctx.active_meeting.lock().clone();
+                let _ = ctx.tx.send(ServerEvent::RecordingStopped {
+                    file_path: path.to_string_lossy().to_string(),
+                    duration_seconds: status.elapsed_seconds,
+                    meeting: current_meeting,
+                });
+            }
+            drop(rec);
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                std::process::exit(0);
             });
         }
         ClientCommand::Ping => {

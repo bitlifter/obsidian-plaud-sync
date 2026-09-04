@@ -209,3 +209,63 @@
   font-size: 0.85em;
   color: var(--text-muted);
 }
+
+.plaud-dashboard-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plaud-feature-toggle-btn {
+  font-size: 0.75em;
+  padding: 3px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  transition: all 0.15s ease;
+}
+
+.plaud-feature-toggle-btn.is-enabled {
+  color: var(--text-success, #2ecc71);
+  border-color: rgba(46, 204, 113, 0.4);
+  background: rgba(46, 204, 113, 0.1);
+}
+
+.plaud-feature-toggle-btn.is-disabled {
+  color: var(--text-muted);
+  border-color: var(--background-modifier-border);
+  opacity: 0.7;
+}
+
+.plaud-status-disabled {
+  background-color: rgba(149, 165, 166, 0.15);
+  color: var(--text-muted);
+}
+
+.plaud-disabled-banner {
+  background-color: var(--background-secondary);
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 24px 16px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.plaud-disabled-banner h4 {
+  margin: 0;
+  font-size: 1.05em;
+  color: var(--text-normal);
+}
+
+.plaud-disabled-banner p {
+  margin: 0;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  max-width: 320px;
+}
+

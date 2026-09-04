@@ -54,6 +54,7 @@ export default class PlaudPlugin extends Plugin {
   public syncEngine: PlaudSyncEngine = null as any;
   public daemonClient: DaemonClient | null = null;
   private statusBarItem: HTMLElement | null = null;
+  private meetingStatusBarItem: HTMLElement | null = null;
   private pendingSlideEditor: Editor | null = null;
 
   async onload(): Promise<void> {
@@ -249,6 +250,14 @@ export default class PlaudPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "plaud-toggle-meeting-recorder",
+      name: "Toggle live meeting recording feature on/off",
+      callback: () => {
+        this.toggleMeetingRecordingFeature();
+      }
+    });
+
     // File Context Menu: Transcribe any audio file
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
@@ -277,6 +286,13 @@ export default class PlaudPlugin extends Plugin {
     this.statusBarItem = this.addStatusBarItem();
     this.updateStatusBar();
 
+    this.meetingStatusBarItem = this.addStatusBarItem();
+    this.meetingStatusBarItem.addClass("mod-clickable");
+    this.meetingStatusBarItem.addEventListener("click", () => {
+      this.toggleMeetingRecordingFeature();
+    });
+    this.updateMeetingStatusBar();
+
     // 5. Auto-sync & auto-import on startup if enabled
     if (this.settings.autoSyncOnStartup || this.settings.autoImportPlaudCache) {
       this.app.workspace.onLayoutReady(() => {
@@ -304,11 +320,23 @@ export default class PlaudPlugin extends Plugin {
     if (!this.daemonClient) return;
 
     this.daemonClient.addListener((event: DaemonEvent) => {
-      if (event.type === "meeting_detected") {
+      if (event.type === "tick") {
+        if (event.is_recording) {
+          this.updateMeetingStatusBar(`🎙️ [${event.timecode_formatted}]`);
+        } else if (this.settings.enableCompanionDaemon) {
+          this.updateMeetingStatusBar();
+        }
+      } else if (event.type === "feature_toggled") {
+        this.settings.enableCompanionDaemon = event.enabled;
+        this.saveSettings();
+        this.updateMeetingStatusBar();
+        new Notice(event.enabled ? "🎙️ Meeting recording enabled" : "⏸️ Meeting recording disabled", 3000);
+      } else if (event.type === "meeting_detected") {
         new Notice(`🎙️ Detected ${event.meeting.app}: "${event.meeting.title}"`, 5000);
       } else if (event.type === "recording_started") {
         new Notice(`🔴 Recording started: ${event.meeting?.title || "Meeting"}`, 5000);
       } else if (event.type === "recording_stopped") {
+        this.updateMeetingStatusBar();
         this.handleRecordingStopped(event.file_path, event.duration_seconds, event.meeting?.title);
       } else if (event.type === "slide_captured") {
         this.handleSlideCaptured(event);
@@ -323,6 +351,50 @@ export default class PlaudPlugin extends Plugin {
         this.daemonClient?.launchDaemon(binDir, attachmentsDir, this.settings.autoRecordMeetings);
       }, 2000);
     });
+  }
+
+  public updateMeetingStatusBar(customText?: string) {
+    if (!this.meetingStatusBarItem) return;
+    if (customText) {
+      this.meetingStatusBarItem.setText(customText);
+      this.meetingStatusBarItem.title = "Meeting Recorder: Click to toggle feature";
+      return;
+    }
+    if (this.settings.enableCompanionDaemon) {
+      this.meetingStatusBarItem.setText("🎙️ Meeting: Active");
+      this.meetingStatusBarItem.title = "Meeting Recorder Active (Click to disable)";
+    } else {
+      this.meetingStatusBarItem.setText("🎙️ Meeting: Off");
+      this.meetingStatusBarItem.title = "Meeting Recorder Disabled (Click to enable)";
+    }
+  }
+
+  public async toggleMeetingRecordingFeature(enabled?: boolean) {
+    const next = enabled !== undefined ? enabled : !this.settings.enableCompanionDaemon;
+    this.settings.enableCompanionDaemon = next;
+    await this.saveSettings();
+    this.updateMeetingStatusBar();
+
+    if (!this.daemonClient) {
+      this.daemonClient = new DaemonClient(this.settings.daemonPort || 8198);
+      this.setupDaemonClient();
+    }
+
+    if (next) {
+      if (!this.daemonClient.connected) {
+        const binDir = this.resolveBinDir();
+        const attachmentsDir = this.resolveAttachmentsDir();
+        this.daemonClient.launchDaemon(binDir, attachmentsDir, this.settings.autoRecordMeetings);
+      } else {
+        this.daemonClient.setFeatureEnabled(true);
+      }
+      new Notice("🎙️ Meeting recording enabled", 3000);
+    } else {
+      if (this.daemonClient && this.daemonClient.connected) {
+        this.daemonClient.setFeatureEnabled(false);
+      }
+      new Notice("⏸️ Meeting recording disabled", 3000);
+    }
   }
 
   public resolveBinDir(): string {
