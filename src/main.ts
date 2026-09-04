@@ -1,7 +1,12 @@
-import { App, Modal, Plugin, TFile, Notice } from "obsidian";
+import { App, Modal, Plugin, TFile, Notice, Editor, MarkdownView, normalizePath, WorkspaceLeaf } from "obsidian";
+import * as path from "path";
+import * as fs from "fs";
+import * as fsPromises from "fs/promises";
 import { PlaudPluginSettings, DEFAULT_SETTINGS } from "./types";
 import { PlaudSyncEngine } from "./sync-engine";
 import { PlaudSettingTab } from "./settings";
+import { DaemonClient, DaemonEvent, SlideCapturedEvent, RecordingStoppedEvent } from "./daemon-client";
+import { LiveMeetingDashboardView, VIEW_TYPE_LIVE_MEETING_DASHBOARD } from "./dashboard-view";
 
 class SyncLogModal extends Modal {
   private logContent: string;
@@ -44,7 +49,9 @@ class SyncLogModal extends Modal {
 export default class PlaudPlugin extends Plugin {
   public settings: PlaudPluginSettings = DEFAULT_SETTINGS;
   public syncEngine: PlaudSyncEngine = null as any;
+  public daemonClient: DaemonClient | null = null;
   private statusBarItem: HTMLElement | null = null;
+  private pendingSlideEditor: Editor | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -55,12 +62,30 @@ export default class PlaudPlugin extends Plugin {
       () => this.saveSettings()
     );
 
+    // Register Dashboard View
+    this.registerView(
+      VIEW_TYPE_LIVE_MEETING_DASHBOARD,
+      (leaf: WorkspaceLeaf) => {
+        const view = new LiveMeetingDashboardView(leaf, this.daemonClient!);
+        view.setOnStopAndProcess(async (filePath, durationSec, meetingTitle) => {
+          await this.handleRecordingStopped(filePath, durationSec, meetingTitle);
+        });
+        return view;
+      }
+    );
+
+    // Initialize Companion Daemon if enabled
+    if (this.settings.enableCompanionDaemon) {
+      this.daemonClient = new DaemonClient(this.settings.daemonPort || 8198);
+      this.setupDaemonClient();
+    }
+
     const onProgress = (cur: number, tot: number, title: string) => {
       const shortTitle = title.length > 22 ? title.slice(0, 22) + "..." : title;
       this.updateStatusBar(`[${cur}/${tot}] ${shortTitle}`);
     };
 
-    // 1. Ribbon Icon (Left sidebar)
+    // 1. Ribbon Icons (Left sidebar)
     this.addRibbonIcon("mic", "Plaud to Obsidian: Sync Recordings", async () => {
       this.updateStatusBar("Syncing...");
       try {
@@ -68,6 +93,10 @@ export default class PlaudPlugin extends Plugin {
       } finally {
         this.updateStatusBar();
       }
+    });
+
+    this.addRibbonIcon("audio-lines", "Live Meeting Monitor", async () => {
+      await this.activateDashboardView();
     });
 
     // 2. Command Palette Actions
@@ -150,6 +179,73 @@ export default class PlaudPlugin extends Plugin {
       }
     });
 
+    // Companion Daemon Commands
+    this.addCommand({
+      id: "plaud-open-live-dashboard",
+      name: "Open Live Meeting Dashboard",
+      callback: async () => {
+        await this.activateDashboardView();
+      }
+    });
+
+    this.addCommand({
+      id: "plaud-insert-timecode",
+      name: "Insert current meeting timecode",
+      hotkeys: [{ modifiers: ["Mod", "Alt"], key: "t" }],
+      editorCallback: (editor: Editor) => {
+        const tc = this.daemonClient?.getTimecode() || "00:00";
+        editor.replaceSelection(`**[${tc}]** `);
+      }
+    });
+
+    this.addCommand({
+      id: "plaud-capture-slide",
+      name: "Capture meeting slide / screenshot",
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "s" }],
+      editorCallback: (editor: Editor) => {
+        if (!this.daemonClient || !this.daemonClient.connected) {
+          new Notice("Meeting recorder companion is not connected.");
+          return;
+        }
+        this.pendingSlideEditor = editor;
+        this.daemonClient.captureSlide();
+        new Notice("Capturing slide...");
+      }
+    });
+
+    this.addCommand({
+      id: "plaud-daemon-start-record",
+      name: "Meeting Recorder: Start manual recording",
+      callback: () => {
+        this.daemonClient?.startRecording();
+        new Notice("Meeting recording requested.");
+      }
+    });
+
+    this.addCommand({
+      id: "plaud-daemon-stop-record",
+      name: "Meeting Recorder: Stop recording",
+      callback: () => {
+        this.daemonClient?.stopRecording();
+        new Notice("Stopping meeting recording...");
+      }
+    });
+
+    this.addCommand({
+      id: "plaud-daemon-pause-record",
+      name: "Meeting Recorder: Pause/Resume recording",
+      callback: () => {
+        const isPaused = this.daemonClient?.currentTick?.is_paused;
+        if (isPaused) {
+          this.daemonClient?.resumeRecording();
+          new Notice("Resumed meeting recording.");
+        } else {
+          this.daemonClient?.pauseRecording();
+          new Notice("Paused meeting recording.");
+        }
+      }
+    });
+
     // File Context Menu: Transcribe any audio file
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
@@ -201,9 +297,131 @@ export default class PlaudPlugin extends Plugin {
     }
   }
 
+  private setupDaemonClient() {
+    if (!this.daemonClient) return;
+
+    this.daemonClient.addListener((event: DaemonEvent) => {
+      if (event.type === "meeting_detected") {
+        new Notice(`🎙️ Detected ${event.meeting.app}: "${event.meeting.title}"`, 5000);
+      } else if (event.type === "recording_started") {
+        new Notice(`🔴 Recording started: ${event.meeting?.title || "Meeting"}`, 5000);
+      } else if (event.type === "recording_stopped") {
+        this.handleRecordingStopped(event.file_path, event.duration_seconds, event.meeting?.title);
+      } else if (event.type === "slide_captured") {
+        this.handleSlideCaptured(event);
+      }
+    });
+
+    // Launch daemon process and connect
+    this.app.workspace.onLayoutReady(() => {
+      setTimeout(() => {
+        const binDir = this.resolveBinDir();
+        const attachmentsDir = this.resolveAttachmentsDir();
+        this.daemonClient?.launchDaemon(binDir, attachmentsDir);
+      }, 2000);
+    });
+  }
+
+  private resolveBinDir(): string {
+    const pluginDir = this.syncEngine.getPluginDir();
+    const candidatePaths = [
+      path.join(pluginDir, "bin"),
+      path.join("c:", "Users", "micro", "repos", "personal", "obsidian-plaud-sync", "bin"),
+    ];
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) return p;
+    }
+    return candidatePaths[0];
+  }
+
+  private resolveAttachmentsDir(): string {
+    const adapter = this.app.vault.adapter as any;
+    const basePath = adapter.getBasePath ? adapter.getBasePath() : "";
+    if (basePath) {
+      return path.join(basePath, this.settings.targetAttachmentsFolder);
+    }
+    const appData = process.env.APPDATA || ".";
+    return path.join(appData, "meeting-recordings");
+  }
+
+  public async activateDashboardView(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(VIEW_TYPE_LIVE_MEETING_DASHBOARD)[0];
+    if (!leaf) {
+      const rightLeaf = workspace.getRightLeaf(false);
+      if (rightLeaf) {
+        await rightLeaf.setViewState({
+          type: VIEW_TYPE_LIVE_MEETING_DASHBOARD,
+          active: true,
+        });
+        leaf = rightLeaf;
+      }
+    }
+    if (leaf) {
+      workspace.revealLeaf(leaf);
+    }
+  }
+
+  private async handleRecordingStopped(filePath: string, durationSec: number, meetingTitle?: string) {
+    new Notice(`🔴 Meeting recording stopped (${Math.round(durationSec)}s). Processing note...`, 8000);
+
+    try {
+      const fileName = path.basename(filePath);
+      const vaultRelPath = normalizePath(`${this.settings.targetAttachmentsFolder}/${fileName}`);
+
+      let targetTFile: TFile | null = null;
+      const existing = this.app.vault.getAbstractFileByPath(vaultRelPath);
+
+      if (existing instanceof TFile) {
+        targetTFile = existing;
+      } else if (fs.existsSync(filePath)) {
+        const buf = await fsPromises.readFile(filePath);
+        const arrayBuf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+        targetTFile = await this.app.vault.createBinary(vaultRelPath, arrayBuf);
+      }
+
+      if (targetTFile) {
+        new Notice(`Transcribing "${targetTFile.name}" with ${this.settings.transcriptionEngine}...`, 6000);
+        await this.syncEngine.transcribeLocalAudioFile(targetTFile);
+        new Notice(`✓ Meeting note generated for "${targetTFile.name}"!`, 8000);
+      }
+    } catch (err: any) {
+      console.error("[PlaudPlugin] Auto-transcription error:", err);
+      new Notice(`Auto-transcription failed: ${err.message}`, 8000);
+    }
+  }
+
+  private async handleSlideCaptured(event: SlideCapturedEvent) {
+    const fileName = event.filename;
+    const timecode = event.timecode_formatted;
+    new Notice(`📸 Slide captured at ${timecode}: ${fileName}`, 4000);
+
+    try {
+      const vaultRelPath = normalizePath(`${this.settings.targetAttachmentsFolder}/${fileName}`);
+      const existing = this.app.vault.getAbstractFileByPath(vaultRelPath);
+      if (!existing && fs.existsSync(event.file_path)) {
+        const buf = await fsPromises.readFile(event.file_path);
+        const arrayBuf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+        await this.app.vault.createBinary(vaultRelPath, arrayBuf);
+      }
+    } catch (e) {
+      console.warn("Could not copy slide image to vault attachments:", e);
+    }
+
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const editor = this.pendingSlideEditor || activeView?.editor;
+    if (editor) {
+      editor.replaceSelection(`\n\n![[${fileName}]]\n*Slide captured at ${timecode}*\n\n`);
+    }
+    this.pendingSlideEditor = null;
+  }
+
   onunload(): void {
     if (this.statusBarItem) {
       this.statusBarItem.remove();
+    }
+    if (this.daemonClient) {
+      this.daemonClient.disconnect();
     }
   }
 

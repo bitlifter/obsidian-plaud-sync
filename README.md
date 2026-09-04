@@ -145,12 +145,30 @@ Copy `main.js`, `manifest.json`, and `styles.css` into `<Your-Vault>/.obsidian/p
 
 ---
 
+### 🎙️ 7. Live Meeting Monitor & Auto-Recorder Companion (Rust Daemon)
+- **Automatic Meeting Detection**: Autodetects Teams, Zoom, Google Meet, Slack Huddles, and Webex calls using lightweight Win32 window heuristics.
+- **Dual-Channel WASAPI Capture**: Simultaneously captures loopback system audio (remote participants) and microphone input (you) into synchronized 16kHz stereo WAV files without causing Windows privacy banners.
+- **Crash-Resilient Background Architecture**: Written in pure Rust. If Obsidian crashes, closes, or restarts, your recording remains 100% safe and uninterrupted.
+- **Live Sidebar Dashboard**: Visualizes meeting duration, active app, and dual real-time VU decibel meters.
+- **In-Meeting Hotkeys**:
+  - `Ctrl+Alt+T` (`Mod+Alt+T`): Inserts current meeting timecode (e.g. `**[04:12]**`) into active notes.
+  - `Ctrl+Shift+S` (`Mod+Shift+S`): Captures active meeting slide and embeds it into your note (`![[slide_04m12s.png]]`).
+- **Cross-Platform Native Binaries**: Pre-compiled for both Windows x86_64 (`recorder-x64.exe`) and ARM64 Surface Copilot+ PCs (`recorder-arm64.exe`).
+
+---
+
 ## ⌨️ Command Palette
 
 - `Plaud Sync: Sync new recordings from Plaud`
 - `Plaud Sync: Force re-sync all recordings from Plaud`
 - `Plaud Sync: Process local audio inbox (Whisper / Snapdragon NPU)`
 - `Plaud Sync: Process local audio inbox with Snapdragon NPU (QNN)`
+- `Plaud Sync: Open Live Meeting Dashboard`
+- `Plaud Sync: Insert current meeting timecode` (`Ctrl+Alt+T`)
+- `Plaud Sync: Capture meeting slide / screenshot` (`Ctrl+Shift+S`)
+- `Plaud Sync: Meeting Recorder: Start manual recording`
+- `Plaud Sync: Meeting Recorder: Stop recording`
+- `Plaud Sync: Meeting Recorder: Pause/Resume recording`
 - `Plaud Sync: View sync log`
 
 ---

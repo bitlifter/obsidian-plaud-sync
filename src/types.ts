@@ -30,6 +30,9 @@ export interface PlaudPluginSettings {
   autoSyncOnStartup: boolean;
   plaudDesktopCachePath: string;
   autoImportPlaudCache: boolean;
+  enableCompanionDaemon: boolean;
+  daemonPort: number;
+  autoRecordMeetings: boolean;
   lastSync: string | null;
   syncedFiles: Record<string, {
     title: string;
@@ -65,6 +68,9 @@ export const DEFAULT_SETTINGS: PlaudPluginSettings = {
   autoSyncOnStartup: false,
   plaudDesktopCachePath: "",
   autoImportPlaudCache: false,
+  enableCompanionDaemon: true,
+  daemonPort: 8198,
+  autoRecordMeetings: true,
   lastSync: null,
   syncedFiles: {}
 };

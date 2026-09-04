@@ -6,3 +6,4 @@ Thumbs.db
 .env
 .env.*
 data.json
+companion-daemon/target/

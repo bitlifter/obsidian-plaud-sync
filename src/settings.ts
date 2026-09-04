@@ -603,7 +603,50 @@ export class PlaudSettingTab extends PluginSettingTab {
           })
       );
 
-    // 4. Automation & Actions
+    // 4. Standalone Meeting Recorder Daemon
+    containerEl.createEl("h3", { text: "Meeting Recorder Companion (Auto-Record)" });
+
+    new Setting(containerEl)
+      .setName("Enable Companion Recorder Daemon")
+      .setDesc("Runs the standalone low-overhead WASAPI recorder in the background for meeting detection and dual-channel recording.")
+      .addToggle(toggle =>
+        toggle
+          .setValue(this.plugin.settings.enableCompanionDaemon)
+          .onChange(async val => {
+            this.plugin.settings.enableCompanionDaemon = val;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto-record Detected Meetings")
+      .setDesc("Automatically start dual-channel loopback & mic recording when Teams, Zoom, Google Meet, Slack, or Webex opens.")
+      .addToggle(toggle =>
+        toggle
+          .setValue(this.plugin.settings.autoRecordMeetings)
+          .onChange(async val => {
+            this.plugin.settings.autoRecordMeetings = val;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("WebSocket Port")
+      .setDesc("Local IPC port for communication between Obsidian and the companion recorder daemon.")
+      .addText(text =>
+        text
+          .setPlaceholder("8198")
+          .setValue(this.plugin.settings.daemonPort?.toString() || "8198")
+          .onChange(async val => {
+            const p = parseInt(val.trim(), 10);
+            if (!isNaN(p) && p > 1024 && p < 65535) {
+              this.plugin.settings.daemonPort = p;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    // 5. Automation & Actions
     containerEl.createEl("h3", { text: "Automation & Manual Sync" });
 
     new Setting(containerEl)
