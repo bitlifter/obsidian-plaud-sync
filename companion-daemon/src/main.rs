@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -5,6 +6,8 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 
 mod audio;
 mod detector;
@@ -49,12 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, _rx) = broadcast::channel(64);
     let recorder = Arc::new(Mutex::new(AudioRecorder::new()));
     let active_meeting = Arc::new(Mutex::new(None::<DetectedMeeting>));
-    let dismissed_meeting_hwnd = Arc::new(Mutex::new(None::<isize>));
+    let dismissed_meeting_hwnds = Arc::new(Mutex::new(HashSet::<isize>::new()));
 
     let server_ctx = Arc::new(ServerContext {
         recorder: recorder.clone(),
         active_meeting: active_meeting.clone(),
-        dismissed_meeting_hwnd: dismissed_meeting_hwnd.clone(),
+        dismissed_meeting_hwnds: dismissed_meeting_hwnds.clone(),
         vault_attachments_dir: vault_dir.clone(),
         tx: tx.clone(),
     });
@@ -99,6 +102,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         ticker.tick().await;
 
+        // Prune dismissed HWNDs if the window has been closed
+        {
+            let mut dismissed = dismissed_meeting_hwnds.lock();
+            dismissed.retain(|&hwnd| unsafe {
+                IsWindow(HWND(hwnd as _)).as_bool()
+            });
+        }
+
         let detected = scan_for_meetings();
         let is_recording = recorder.lock().get_status().is_recording;
 
@@ -114,10 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *active_meeting.lock() = Some(meeting.clone());
             }
 
-            let is_dismissed = {
-                let dismissed = dismissed_meeting_hwnd.lock();
-                dismissed.as_ref() == Some(&meeting.hwnd)
-            };
+            let is_dismissed = dismissed_meeting_hwnds.lock().contains(&meeting.hwnd);
 
             if args.auto_record && !is_recording && !is_dismissed {
                 let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
@@ -136,9 +144,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         } else {
-            // Meeting is no longer detected, reset dismissed HWND
-            *dismissed_meeting_hwnd.lock() = None;
-
             // Meeting is no longer detected
             if is_recording {
                 if let Some(last_seen) = last_seen_meeting {

@@ -93,7 +93,7 @@ export class LiveMeetingDashboardView extends ItemView {
             notice.hide();
             new Notice(`✓ Installed ${exeName}! Starting daemon...`, 6000);
             const attachmentsDir = this.plugin!.resolveAttachmentsDir();
-            this.daemon.launchDaemon(binDir, attachmentsDir);
+            this.daemon.launchDaemon(binDir, attachmentsDir, this.plugin?.settings.autoRecordMeetings);
             await this.onOpen();
           } catch (e: any) {
             notice.hide();
@@ -109,7 +109,7 @@ export class LiveMeetingDashboardView extends ItemView {
     // Meeting Details Card
     const card = container.createDiv({ cls: "plaud-meeting-card" });
     this.meetingAppEl = card.createDiv({ cls: "plaud-meeting-app", text: "No active meeting detected" });
-    this.meetingTitleEl = card.createDiv({ cls: "plaud-meeting-title", text: "Waiting for Teams, Zoom, or Meet..." });
+    this.meetingTitleEl = card.createDiv({ cls: "plaud-meeting-title", text: "Waiting for a meeting to start..." });
 
     // Timer
     const timerCard = container.createDiv({ cls: "plaud-timer-card" });
@@ -182,8 +182,8 @@ export class LiveMeetingDashboardView extends ItemView {
       this.pauseResumeBtn.disabled = true;
       this.stopBtn.disabled = true;
       this.captureBtn.disabled = true;
-      this.meetingAppEl.textContent = "No meeting active";
-      this.meetingTitleEl.textContent = "Waiting for Teams, Zoom, or Meet...";
+      this.meetingAppEl.textContent = "No active meeting detected";
+      this.meetingTitleEl.textContent = "Waiting for a meeting to start...";
       this.timerEl.textContent = "00:00";
       this.micMeterEl.style.width = "0%";
       this.micDbEl.textContent = "-60 dB";
@@ -231,8 +231,8 @@ export class LiveMeetingDashboardView extends ItemView {
       this.meetingAppEl.textContent = tick.active_meeting.app;
       this.meetingTitleEl.textContent = tick.active_meeting.title;
     } else if (!tick.is_recording) {
-      this.meetingAppEl.textContent = "No meeting active";
-      this.meetingTitleEl.textContent = "Waiting for Teams, Zoom, or Meet...";
+      this.meetingAppEl.textContent = "No active meeting detected";
+      this.meetingTitleEl.textContent = "Waiting for a meeting to start...";
     }
 
     // VU Meters (map -60dB to 0dB -> 0% to 100%)

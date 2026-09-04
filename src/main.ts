@@ -320,7 +320,7 @@ export default class PlaudPlugin extends Plugin {
       setTimeout(() => {
         const binDir = this.resolveBinDir();
         const attachmentsDir = this.resolveAttachmentsDir();
-        this.daemonClient?.launchDaemon(binDir, attachmentsDir);
+        this.daemonClient?.launchDaemon(binDir, attachmentsDir, this.settings.autoRecordMeetings);
       }, 2000);
     });
   }

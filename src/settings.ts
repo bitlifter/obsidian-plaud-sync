@@ -712,7 +712,12 @@ export class PlaudSettingTab extends PluginSettingTab {
                 notice.setMessage(`Downloading ${companionExe}: ${percent}%`);
               });
               notice.hide();
-              new Notice(`✓ Companion binary updated!`, 5000);
+              new Notice(`✓ Companion binary updated! Restarting daemon...`, 5000);
+              this.plugin.daemonClient?.disconnect();
+              const attachmentsDir = this.plugin.resolveAttachmentsDir();
+              setTimeout(() => {
+                this.plugin.daemonClient?.launchDaemon(binDir, attachmentsDir, this.plugin.settings.autoRecordMeetings);
+              }, 1000);
               this.display();
             } catch (err: any) {
               notice.hide();

@@ -70,7 +70,7 @@ export const DEFAULT_SETTINGS: PlaudPluginSettings = {
   autoImportPlaudCache: false,
   enableCompanionDaemon: true,
   daemonPort: 8198,
-  autoRecordMeetings: true,
+  autoRecordMeetings: false,
   lastSync: null,
   syncedFiles: {}
 };

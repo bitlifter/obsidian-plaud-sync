@@ -73,7 +73,7 @@ pub enum ClientCommand {
 pub struct ServerContext {
     pub recorder: Arc<Mutex<AudioRecorder>>,
     pub active_meeting: Arc<Mutex<Option<DetectedMeeting>>>,
-    pub dismissed_meeting_hwnd: Arc<Mutex<Option<isize>>>,
+    pub dismissed_meeting_hwnds: Arc<Mutex<std::collections::HashSet<isize>>>,
     pub vault_attachments_dir: std::path::PathBuf,
     pub tx: broadcast::Sender<ServerEvent>,
 }
@@ -159,7 +159,7 @@ fn handle_command(cmd: ClientCommand, ctx: &ServerContext) {
             if let Some(path) = rec.stop() {
                 let current_meeting = ctx.active_meeting.lock().clone();
                 if let Some(ref m) = current_meeting {
-                    *ctx.dismissed_meeting_hwnd.lock() = Some(m.hwnd);
+                    ctx.dismissed_meeting_hwnds.lock().insert(m.hwnd);
                     log::info!("Manually stopped recording for meeting '{}' (hwnd: {}). Auto-record suppressed for this window.", m.title, m.hwnd);
                 }
 

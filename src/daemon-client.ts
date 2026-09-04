@@ -197,7 +197,7 @@ export class DaemonClient {
     return this.lastTick?.timecode_formatted || "00:00";
   }
 
-  public launchDaemon(binDir: string, vaultDir: string) {
+  public launchDaemon(binDir: string, vaultDir: string, autoRecord: boolean = false) {
     if (this.isConnected) return;
 
     const exeName = getCompanionExeName();
@@ -209,18 +209,19 @@ export class DaemonClient {
     }
 
     try {
-      this.childProcess = spawn(
-        exePath,
-        ["--port", this.port.toString(), "--vault-dir", vaultDir, "--auto-record"],
-        {
-          detached: true,
-          stdio: "ignore",
-          windowsHide: true,
-        }
-      );
+      const args = ["--port", this.port.toString(), "--vault-dir", vaultDir];
+      if (autoRecord) {
+        args.push("--auto-record");
+      }
+
+      this.childProcess = spawn(exePath, args, {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
 
       this.childProcess.unref();
-      console.log(`[DaemonClient] Spawned companion daemon (${exeName})`);
+      console.log(`[DaemonClient] Spawned companion daemon (${exeName}), auto-record: ${autoRecord}`);
       setTimeout(() => this.connect(), 1000);
     } catch (e) {
       console.error("[DaemonClient] Failed to launch daemon:", e);
